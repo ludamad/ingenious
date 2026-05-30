@@ -2,6 +2,10 @@
 
 A digital implementation of **Ingenious**, the Reiner Knizia tile-laying classic, for **1–4 players** — playable solo, against the computer, hot-seat, or **online**.
 
+### ▶ Play now: https://ludamad.github.io/ingenious/
+
+The hosted build (GitHub Pages, fully static) runs the whole game in your browser via WebAssembly — **Play vs Computer**, **Pass & Play** (hot-seat for 2–4), and **Solitaire**. Realtime online multiplayer needs the optional self-hosted server below (a serverless peer-to-peer mode is planned).
+
 - **Engine** — the full game (rules, scoring, legal-move generation, and the AI) is written in **C++17** and compiled to **WebAssembly** via Emscripten. The exact same `.wasm` runs both in the browser and on the server, so move validation and the CPU are identical everywhere.
 - **Client** — **React + TypeScript** (Vite). A frosted, icy hex board rendered in SVG, six glossy gem symbols, per-player score tracks with sliding pegs, a tile rack, animated placements, synthesized sound (Web Audio, mutable), an **undo**, and a responsive layout with the scoreboard always visible (side panel on desktop, strip on mobile). Works on mobile.
 - **Server** — a **Node + TypeScript** WebSocket server holding authoritative rooms of up to four seats, mixing humans and CPUs, broadcasting redacted state (you only ever see your own rack). Includes an **open-games browser** (join listed rooms or by code) and **undo** (revert your own last move while no one else has acted).
