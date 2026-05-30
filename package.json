@@ -1,0 +1,15 @@
+{
+  "name": "ingenious",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Ingenious (Reiner Knizia) — C++/WASM engine, React+TS client, online multiplayer for 1–4 players.",
+  "scripts": {
+    "setup": "cd engine && ./build.sh && cd ../web && npm install && cd ../server && npm install",
+    "build:engine": "cd engine && ./build.sh",
+    "build": "cd engine && ./build.sh && cd ../web && npm run build",
+    "test:engine": "cd engine && clang++ -std=c++17 -O2 test.cpp -o /tmp/ing_test && /tmp/ing_test",
+    "dev:web": "npm --prefix web run dev",
+    "dev:server": "npm --prefix server run dev",
+    "start": "npm --prefix server start"
+  }
+}

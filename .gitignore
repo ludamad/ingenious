@@ -1,0 +1,16 @@
+node_modules/
+dist/
+*.log
+
+# generated engine artifacts (run engine/build.sh to regenerate).
+# the WEB build artifacts are committed so GitHub Pages CI can build without
+# installing Emscripten; the server copies stay ignored.
+engine/dist/
+server/engine/ingenious.mjs
+server/engine/ingenious.node.wasm
+server/engine/ingenious.wasm
+
+# playwright
+test-results/
+playwright-report/
+ms-playwright/
