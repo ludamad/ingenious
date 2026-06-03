@@ -14,3 +14,4 @@ server/engine/ingenious.wasm
 test-results/
 playwright-report/
 ms-playwright/
+.claude/scheduled_tasks.lock

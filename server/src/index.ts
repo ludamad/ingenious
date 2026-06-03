@@ -13,6 +13,19 @@ import { Clock } from "./clock.js";
 
 const CHAT_HISTORY = 60; // recent chat lines kept per room and replayed on (re)join
 const CHAT_MAX_LEN = 300;
+const NAME_MAX_LEN = 24;
+const MAX_ROOMS = 500;   // global cap so a create-loop can't grow memory unbounded
+
+// Coerce an untrusted wire value to a safe display string: drop control chars,
+// collapse whitespace, cap length. Returns "" if nothing usable remains.
+function cleanText(v: unknown, max: number): string {
+  if (typeof v !== "string") return "";
+  // eslint-disable-next-line no-control-regex
+  return v.replace(/[\u0000-\u001F\u007F]+/g, "").replace(/\s+/g, " ").trim().slice(0, max);
+}
+function cleanName(v: unknown, fallback: string): string {
+  return cleanText(v, NAME_MAX_LEN) || fallback;
+}
 
 const DEFAULT_TIMER: TimerConfig = { mode: "off" };
 
@@ -332,7 +345,7 @@ function doChat(ws: WebSocket, msg: Extract<ClientMsg, { t: "chat" }>) {
   const room = rooms.get(ctx.roomId); if (!room) return;
   const seat = room.seats[ctx.seat];
   if (!seat || seat.ws !== ws) return;
-  const text = (msg.text ?? "").toString().replace(/\s+/g, " ").trim().slice(0, CHAT_MAX_LEN);
+  const text = cleanText(msg.text, CHAT_MAX_LEN);
   if (!text) return;
   pushChat(room, { seat: ctx.seat, name: seat.name, text, ts: Date.now() });
 }
@@ -349,16 +362,26 @@ function sanitizeTimer(t: TimerConfig | undefined): TimerConfig {
   return DEFAULT_TIMER;
 }
 
+// Detach a socket from whatever room/seat it currently holds (same handling as
+// a disconnect) — used before create/join so a client can't hold two seats and
+// leak its old room. onClose is hoisted (function declaration).
+function vacate(ws: WebSocket) { onClose(ws); }
+
 function doCreate(ws: WebSocket, msg: Extract<ClientMsg, { t: "create" }>) {
+  if (rooms.size >= MAX_ROOMS) return send(ws, { t: "error", message: "Server is busy — try again shortly." });
+  // Leave any room this socket already occupies, so repeated creates can't leak
+  // orphaned rooms holding this ws in seat 0.
+  vacate(ws);
   const n = Math.max(2, Math.min(4, msg.numPlayers | 0));
   const id = newRoomId();
+  const cpuSeats: number[] = Array.isArray(msg.cpuSeats) ? msg.cpuSeats : [];
   let cpuCount = 0;
   const seats: Seat[] = [];
   for (let i = 0; i < n; i++) {
-    const isCpu = i !== 0 && msg.cpuSeats.includes(i);
+    const isCpu = i !== 0 && cpuSeats.includes(i);
     seats.push({
       type: isCpu ? "cpu" : "human",
-      name: isCpu ? `CPU ${++cpuCount}` : i === 0 ? (msg.name || "Host") : `Seat ${i + 1}`,
+      name: isCpu ? `CPU ${++cpuCount}` : i === 0 ? cleanName(msg.name, "Host") : `Seat ${i + 1}`,
       ws: i === 0 ? ws : null,
       connected: i === 0,
       aiLevel: msg.aiLevel ?? 1,
@@ -378,13 +401,15 @@ function doCreate(ws: WebSocket, msg: Extract<ClientMsg, { t: "create" }>) {
 }
 
 function doJoin(ws: WebSocket, msg: Extract<ClientMsg, { t: "join" }>) {
-  const room = rooms.get(msg.roomId.toUpperCase());
+  const code = String(msg.roomId ?? "").toUpperCase();
+  const room = rooms.get(code);
   if (!room) return send(ws, { t: "error", message: "Room not found." });
   if (room.started) return send(ws, { t: "error", message: "Game already started." });
   const seatIdx = room.seats.findIndex((s) => s.type === "human" && s.ws == null);
   if (seatIdx < 0) return send(ws, { t: "error", message: "Room is full." });
+  vacate(ws); // leave any other room first
   const seat = room.seats[seatIdx];
-  seat.ws = ws; seat.connected = true; seat.name = msg.name || `Seat ${seatIdx + 1}`;
+  seat.ws = ws; seat.connected = true; seat.name = cleanName(msg.name, `Seat ${seatIdx + 1}`);
   seat.token = newToken();
   browsing.delete(ws);
   ctxOf.set(ws, { roomId: room.id, seat: seatIdx });
@@ -398,9 +423,10 @@ function doJoin(ws: WebSocket, msg: Extract<ClientMsg, { t: "join" }>) {
 // join time. Works mid-game (the seat was kept as a dropped human, auto-piloted
 // in the meantime) and is the path the client uses to recover from any drop.
 function doRejoin(ws: WebSocket, msg: Extract<ClientMsg, { t: "rejoin" }>) {
-  const room = rooms.get(msg.roomId.toUpperCase());
+  const room = rooms.get(String(msg.roomId ?? "").toUpperCase());
   if (!room) return send(ws, { t: "error", message: "That game is no longer available." });
-  const seatIdx = room.seats.findIndex((s) => s.type === "human" && s.token !== "" && s.token === msg.token);
+  const token = typeof msg.token === "string" ? msg.token : "";
+  const seatIdx = token ? room.seats.findIndex((s) => s.type === "human" && s.token !== "" && s.token === token) : -1;
   if (seatIdx < 0) return send(ws, { t: "error", message: "Could not find your seat to reconnect." });
   const seat = room.seats[seatIdx];
   if (seat.ws && seat.ws !== ws) { try { seat.ws.close(); } catch { /* ignore */ } }
@@ -521,9 +547,18 @@ function onClose(ws: WebSocket) {
   const droppedName = seat.name;
   seat.ws = null; seat.connected = false;
 
+  ctxOf.delete(ws);
   if (!room.started) {
-    // free the seat again for someone else (and retire its rejoin token)
-    if (!seat.isHost) { seat.name = `Seat ${ctx.seat + 1}`; seat.token = ""; }
+    // Retire the rejoin token (the seat may be reassigned to a new joiner).
+    seat.token = "";
+    if (!seat.isHost) seat.name = `Seat ${ctx.seat + 1}`;
+    // If the host left, hand host to a remaining connected human so the room
+    // isn't stuck unstartable (and the next joiner doesn't silently inherit it).
+    if (seat.isHost) {
+      seat.isHost = false;
+      const heir = room.seats.find((s) => s.type === "human" && s.ws != null);
+      if (heir) heir.isHost = true;
+    }
     systemChat(room, `${droppedName} left.`);
     // if nobody is connected, drop the room
     if (room.seats.every((s) => s.ws == null)) rooms.delete(room.id);

@@ -118,7 +118,7 @@ export function GameView({ match, onLeave }: { match: Match; onLeave: () => void
   }, [snap]);
 
   // reset the placement (and any explanation) when the turn / hand changes
-  useEffect(() => { dispatch({ t: "reset" }); setExplanation(null); }, [state.current, snap.handCounts[seat ?? -1], snap.gameOver]);
+  useEffect(() => { dispatch({ t: "reset" }); setExplanation(null); setHoverTileIndex(null); }, [state.current, snap.handCounts[seat ?? -1], snap.gameOver]);
 
   // Player-arranged display order for the rack (hand indices). Reset to natural
   // order whenever the hand size / turn / seat changes, so stale indices never

@@ -8,17 +8,19 @@
 import type { Game, Move } from "../engine/engine";
 import { loadEngine } from "../engine/engine";
 import { PALETTE } from "../hex";
-import { Clock } from "./clock";
+import { Clock, type ClockSnapshot } from "./clock";
 import { DEFAULT_TIMER, Emitter, type Match, type PlayerInfo, type Snapshot, type TimerConfig } from "./types";
 
 const CPU_DELAY = 420;
 const PREVIEW_HOLD = 360;
 const TICK_MS = 250;
 
+// `clock` is the clock state captured just BEFORE the action ran, so undo can
+// rewind the clock exactly (see undo()).
 type Action =
-  | { kind: "move"; seat: number; m: Move }
-  | { kind: "swap"; seat: number }
-  | { kind: "pass"; seat: number };
+  | { kind: "move"; seat: number; m: Move; clock: ClockSnapshot | null }
+  | { kind: "swap"; seat: number; clock: ClockSnapshot | null }
+  | { kind: "pass"; seat: number; clock: ClockSnapshot | null };
 
 export class LocalMatch extends Emitter implements Match {
   private g: Game;
@@ -102,6 +104,7 @@ export class LocalMatch extends Emitter implements Match {
     }
     if (cut < 0) return;
     if (this.timer != null) { clearTimeout(this.timer); this.timer = null; }
+    const cutClock = this.history[cut].clock; // clock state just before the reverted action
     const replay = this.history.slice(0, cut);
 
     try { this.g.delete(); } catch { /* already freed */ }
@@ -117,7 +120,10 @@ export class LocalMatch extends Emitter implements Match {
       ? [{ q: last.m.q, r: last.m.r }, { q: last.m.q + DIRS[last.m.dir][0], r: last.m.r + DIRS[last.m.dir][1] }]
       : [];
     this.preview = null;
-    this.clock.sync(this.g.current(), false);
+    // Rewind the clock to exactly before the reverted action, rather than letting
+    // sync() treat the reverted position as a fresh turn (which would refund a
+    // per-move budget / keep already-spent chess time).
+    if (cutClock) this.clock.restore(cutClock);
     this.message = `Undo — ${this.turnMessage()}`;
     this.refresh();
     // current is the human whose action we removed, so no CPU auto-play here
@@ -170,17 +176,25 @@ export class LocalMatch extends Emitter implements Match {
   }
   private refresh() { this.rebuild(); this.emit(); }
 
+  // Clock state as of right now (before the next action) — stored on the action
+  // so undo can rewind the clock exactly. null when no timer is running.
+  private snapClock(): ClockSnapshot | null {
+    return this.clock.active() ? this.clock.snapshot() : null;
+  }
+
   private applySwap(): boolean {
     const seat = this.g.current();
+    const clock = this.snapClock();
     if (!this.g.swap()) return false;
-    this.history.push({ kind: "swap", seat });
+    this.history.push({ kind: "swap", seat, clock });
     this.lastPlaced = [];
     return true;
   }
   private applyPass(): boolean {
     const seat = this.g.current();
+    const clock = this.snapClock();
     if (!this.g.pass()) return false;
-    this.history.push({ kind: "pass", seat });
+    this.history.push({ kind: "pass", seat, clock });
     this.lastPlaced = [];
     return true;
   }
@@ -188,9 +202,10 @@ export class LocalMatch extends Emitter implements Match {
   private doMove(m: Move) {
     this.preview = null;
     const mover = this.g.current();
+    const clock = this.snapClock();
     const res = this.g.applyMove(m.tileIndex, m.q, m.r, m.dir, m.flip);
     if (!res.ok) { this.message = "Illegal move."; this.refresh(); return; }
-    this.history.push({ kind: "move", seat: mover, m });
+    this.history.push({ kind: "move", seat: mover, m, clock });
     const [dx, dy] = DIRS[m.dir];
     this.lastPlaced = [{ q: m.q, r: m.r }, { q: m.q + dx, r: m.r + dy }];
     const gained = res.deltas.map((d) => `${d.points} ${PALETTE[d.color].name.toLowerCase()}`).join(", ");

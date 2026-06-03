@@ -96,19 +96,27 @@ export class OnlineMatch extends Emitter implements Match {
     const t = text.trim();
     if (t) this.send({ t: "chat", text: t });
   }
-  // link state for the UI: are we connected, or trying to recover?
-  connection(): Link { return this.link; }
 
   // --- Match impl ---
+  // Cache the pre-game fallback snapshot and only rebuild it when its inputs
+  // (err/link) change, so getSnapshot() stays referentially stable as
+  // useSyncExternalStore requires.
+  private fallback: Snapshot | null = null;
+  private fallbackKey = "";
   snapshot(): Snapshot {
     if (this.snap) return this.snap;
-    return {
-      state: { numPlayers: 0, regionRadius: 5, cap: 18, solitaire: false, current: 0,
-        pendingBonus: 0, finished: false, firstRound: true, bagCount: 0, cells: [], scores: [], hands: [] },
-      handCounts: [], players: [], mySeat: null, yourTurn: false, legalMoves: [], canSwap: false, canUndo: false,
-      pendingBonus: 0, lastPlaced: [], previewMove: null, message: this.err || "Connecting…", gameOver: false, ranking: [],
-      reconnecting: this.link !== "online",
-    };
+    const key = `${this.err}|${this.link}`;
+    if (!this.fallback || this.fallbackKey !== key) {
+      this.fallback = {
+        state: { numPlayers: 0, regionRadius: 5, cap: 18, solitaire: false, current: 0,
+          pendingBonus: 0, finished: false, firstRound: true, bagCount: 0, cells: [], scores: [], hands: [] },
+        handCounts: [], players: [], mySeat: null, yourTurn: false, legalMoves: [], canSwap: false, canUndo: false,
+        pendingBonus: 0, lastPlaced: [], previewMove: null, message: this.err || "Connecting…", gameOver: false, ranking: [],
+        reconnecting: this.link !== "online",
+      };
+      this.fallbackKey = key;
+    }
+    return this.fallback;
   }
   place(m: Move) { this.send({ t: "move", ...m }); }
   swap() { this.send({ t: "swap" }); }
@@ -156,7 +164,15 @@ export class OnlineMatch extends Emitter implements Match {
       this.setLink("online");
       this.bump();
     };
-    ws.onmessage = (e) => this.onMessage(JSON.parse(e.data) as ServerMsg);
+    ws.onmessage = (e) => {
+      // Don't trust the wire: a malformed frame must not throw inside the
+      // socket callback (where the browser would swallow it and leave us stuck).
+      let msg: ServerMsg;
+      try { msg = JSON.parse(e.data) as ServerMsg; }
+      catch { return; }
+      try { this.onMessage(msg); }
+      catch { this.err = "Bad message from server"; this.bump(); }
+    };
     ws.onerror = () => { /* the close handler drives reconnection */ };
     ws.onclose = () => {
       if (this.ws !== ws) return;       // superseded by a newer socket

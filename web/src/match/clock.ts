@@ -8,6 +8,15 @@
 // counts as one continuous turn.
 import type { ClockState, TimerConfig } from "./types";
 
+// Opaque capture of a clock's mutable state, for undo (save before each move,
+// restore when reverting). Keep in step with the fields in Clock.
+export interface ClockSnapshot {
+  remaining: number[];
+  flagged: boolean[];
+  running: number | null;
+  turnStart: number;
+}
+
 export class Clock {
   private remaining: number[];
   private flagged: boolean[];
@@ -72,6 +81,20 @@ export class Clock {
 
   anyFlagged(): boolean { return this.flagged.some(Boolean); }
   flaggedSeats(): number[] { return this.flagged.flatMap((f, i) => (f ? [i] : [])); }
+
+  // Capture/restore mutable state so undo can rewind the clock exactly, rather
+  // than letting sync() treat the reverted position as a fresh turn hand-off
+  // (which would refund a per-move budget or keep already-spent chess time).
+  snapshot(): ClockSnapshot {
+    this.settle(); // fold elapsed time in so the capture is point-in-time
+    return { remaining: this.remaining.slice(), flagged: this.flagged.slice(), running: this.running, turnStart: this.turnStart };
+  }
+  restore(s: ClockSnapshot) {
+    this.remaining = s.remaining.slice();
+    this.flagged = s.flagged.slice();
+    this.running = s.running;
+    this.turnStart = this.now(); // resume counting from now for the restored seat
+  }
 
   // Current clock as of now (settling the running seat first), for the snapshot.
   state(): ClockState {

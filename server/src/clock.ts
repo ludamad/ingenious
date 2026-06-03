@@ -37,7 +37,9 @@ export class Clock {
   }
 
   private settle() {
-    if (this.running == null) return;
+    // While paused, wall time must not be charged to the (still-"running") seat,
+    // so any state()/check() during the pause window leaves remaining untouched.
+    if (this.running == null || this.paused != null) return;
     const t = this.now();
     this.remaining[this.running] = Math.max(0, this.remaining[this.running] - (t - this.turnStart));
     this.turnStart = t;
