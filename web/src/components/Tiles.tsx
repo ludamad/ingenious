@@ -38,6 +38,8 @@ interface RackProps {
   order: number[];
   selectedIndex: number | null;
   flip: number;
+  // disabled = can't *act* (not your turn / game over). Rearranging and hovering
+  // are still allowed; only selecting/placing/flipping are gated by this.
   disabled: boolean;
   // per-tile: does this tile have at least one legal placement this turn?
   // undefined => unknown (don't dim), e.g. when it isn't your turn.
@@ -47,9 +49,11 @@ interface RackProps {
   onFlip: () => void;
   // move the tile shown at display position `from` to position `to`
   onReorder: (from: number, to: number) => void;
+  // hovering a tile (hand index, or null on leave) previews its board heatmap
+  onHover?: (i: number | null) => void;
 }
 
-export function Rack({ tiles, order, selectedIndex, flip, disabled, placeable, canFlip = true, onSelect, onFlip, onReorder }: RackProps) {
+export function Rack({ tiles, order, selectedIndex, flip, disabled, placeable, canFlip = true, onSelect, onFlip, onReorder, onHover }: RackProps) {
   const [dragPos, setDragPos] = useState<number | null>(null);
   const [overPos, setOverPos] = useState<number | null>(null);
 
@@ -65,31 +69,34 @@ export function Rack({ tiles, order, selectedIndex, flip, disabled, placeable, c
         if (!t) return null;
         const sel = i === selectedIndex;
         const shown = sel && flip ? { a: t.b, b: t.a } : t;
-        // A tile with no legal placement is dimmed and unclickable so there are
-        // no dead clicks — the player can immediately see what's playable.
+        // A tile with no legal placement is dimmed (but still draggable) so there
+        // are no dead clicks — the player can immediately see what's playable.
         const unplaceable = !disabled && placeable != null && !placeable[i];
         const cls = "tile" + (sel ? " selected" : "") + (unplaceable ? " unplaceable" : "")
           + (overPos === pos && dragPos !== pos ? " drop-target" : "")
           + (dragPos === pos ? " dragging" : "");
         return (
           <button key={i} className={cls}
-            // Rearranging is allowed whenever it's your turn — even for tiles you
-            // can't currently place — since order is purely cosmetic.
-            draggable={!disabled}
+            // Rearranging is always allowed (even off-turn, even for unplaceable
+            // tiles) since order is purely cosmetic and personal.
+            draggable
             onDragStart={() => setDragPos(pos)}
-            onDragOver={(e) => { if (!disabled) { e.preventDefault(); setOverPos(pos); } }}
+            onDragOver={(e) => { e.preventDefault(); setOverPos(pos); }}
             onDrop={(e) => { e.preventDefault(); drop(pos); }}
             onDragEnd={() => { setDragPos(null); setOverPos(null); }}
+            // Hover previews the heatmap without needing to select.
+            onMouseEnter={() => onHover?.(i)}
+            onMouseLeave={() => onHover?.(null)}
             // Click selects; clicking the already-selected tile flips it (when it
-            // has a second legal orientation).
+            // has a second legal orientation). Gated to your turn.
             onClick={() => {
               if (disabled || unplaceable) return;
               if (sel && canFlip) onFlip(); else onSelect(i);
             }}
-            disabled={disabled || unplaceable}
-            title={unplaceable ? "No legal spot for this tile"
+            title={disabled ? "Drag to rearrange"
+              : unplaceable ? "No legal spot for this tile · drag to rearrange"
               : sel && canFlip ? "Click to flip · drag to rearrange"
-              : "Drag to rearrange"}>
+              : "Click to select · drag to rearrange"}>
             <TileView tile={shown} size={HEX_SIZE * 0.7} />
           </button>
         );

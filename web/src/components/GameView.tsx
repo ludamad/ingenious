@@ -3,6 +3,8 @@ import { Board } from "./Board";
 import { Rack } from "./Tiles";
 import { ScorePanel } from "./ScorePanel";
 import { Confetti } from "./Confetti";
+import { Chat } from "./Chat";
+import { OnlineMatch } from "../match/OnlineMatch";
 import type { Match } from "../match/types";
 import type { Move } from "../engine/engine";
 import { sound, isMuted, setMuted } from "../sound";
@@ -47,6 +49,11 @@ export function GameView({ match, onLeave }: { match: Match; onLeave: () => void
   const [muted, setMutedState] = useState(isMuted());
   // a transient "why can't I play there" message, shown until the next action
   const [explanation, setExplanation] = useState<string | null>(null);
+  // tile the player is hovering in the rack (hand index) — previews its heatmap
+  const [hoverTileIndex, setHoverTileIndex] = useState<number | null>(null);
+  // online-only chat drawer
+  const online = match instanceof OnlineMatch ? match : null;
+  const [chatOpen, setChatOpen] = useState(false);
 
   const { state } = snap;
   const seat = snap.mySeat;
@@ -77,6 +84,10 @@ export function GameView({ match, onLeave }: { match: Match; onLeave: () => void
   const selectedTile = selected != null && hand[selected] ? hand[selected] : null;
   const selectedFlips = selected != null ? flipsByTile.get(selected) : undefined;
   const canFlip = (selectedFlips?.size ?? 0) > 1;
+
+  // Hovered tile (only meaningful on your turn, when there are legal moves to
+  // score). Ignored while a tile is selected — the selection drives the heatmap.
+  const hoverTile = canSelect && hoverTileIndex != null && hand[hoverTileIndex] ? hand[hoverTileIndex] : null;
 
   // sound effects, by diffing successive snapshots (local / CPU / online alike)
   const prev = useRef<{ lp: string; total: number; maxed: number; over: boolean; yours: boolean } | null>(null);
@@ -173,6 +184,11 @@ export function GameView({ match, onLeave }: { match: Match; onLeave: () => void
           <button className="ghost icon" onClick={toggleMute} title={muted ? "Unmute" : "Mute"}>
             {muted ? "🔇" : "🔊"}
           </button>
+          {online && (
+            <button className="ghost icon chat-toggle" onClick={() => setChatOpen((o) => !o)} title="Chat">
+              💬{online.unreadChat() > 0 && !chatOpen && <span className="chat-badge">{online.unreadChat()}</span>}
+            </button>
+          )}
           <button className="ghost" onClick={onLeave}>Leave</button>
         </div>
       </header>
@@ -202,6 +218,8 @@ export function GameView({ match, onLeave }: { match: Match; onLeave: () => void
             legalMoves={legal}
             selectedTileIndex={selected}
             selectedTile={selectedTile}
+            hoverTileIndex={hoverTileIndex}
+            hoverTile={hoverTile}
             flip={flip}
             anchor={anchor}
             interactive={canSelect}
@@ -218,7 +236,7 @@ export function GameView({ match, onLeave }: { match: Match; onLeave: () => void
         {seat != null && hand.length > 0 ? (
           <Rack tiles={hand} order={order} selectedIndex={selected} flip={flip}
             disabled={!canSelect} placeable={canSelect ? placeableTiles : undefined} canFlip={canFlip}
-            onSelect={selectTile} onFlip={doFlip} onReorder={reorderRack} />
+            onSelect={selectTile} onFlip={doFlip} onReorder={reorderRack} onHover={setHoverTileIndex} />
         ) : (
           <div className="waiting">{snap.gameOver ? "" : "Waiting…"}</div>
         )}
@@ -232,6 +250,16 @@ export function GameView({ match, onLeave }: { match: Match; onLeave: () => void
           {snap.yourTurn && snap.pendingBonus > 0 && <span className="bonus-pill">★ Bonus play</span>}
         </div>
       </footer>
+
+      {online && chatOpen && (
+        <aside className="chat-drawer">
+          <div className="chat-drawer-head">
+            <h3>Chat</h3>
+            <button className="ghost icon" onClick={() => setChatOpen(false)} title="Close chat">✕</button>
+          </div>
+          <Chat match={online} compact />
+        </aside>
+      )}
 
       {snap.gameOver && <GameOver snap={snap} onLeave={onLeave} />}
     </div>

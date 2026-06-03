@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { axialToPixel, hexPoints, DIRS, PALETTE, HEX_SIZE } from "../hex";
 import { Symbol } from "./Symbol";
-import { heatmapFor } from "../engine/score";
+import { heatmapFor, heatColor } from "../engine/score";
 import type { GameState, Move, Tile } from "../engine/engine";
 
 const key = (q: number, r: number) => `${q},${r}`;
@@ -11,6 +11,9 @@ interface Props {
   legalMoves: Move[];
   selectedTileIndex: number | null;
   selectedTile: Tile | null;
+  // a tile being previewed by hover (no selection needed) — drives the heatmap
+  hoverTileIndex?: number | null;
+  hoverTile?: Tile | null;
   flip: number;
   anchor: { q: number; r: number } | null;
   interactive: boolean;
@@ -23,7 +26,13 @@ interface Props {
 }
 
 export function Board(props: Props) {
-  const { state, legalMoves, selectedTileIndex, selectedTile, flip, anchor, interactive, lastPlaced, previewMove } = props;
+  const { state, legalMoves, selectedTileIndex, selectedTile, hoverTileIndex, hoverTile, flip, anchor, interactive, lastPlaced, previewMove } = props;
+
+  // The tile the heatmap should reflect: the selected one, or — when nothing is
+  // selected — whatever the player is hovering in the rack. Hover lets you
+  // compare spots for every tile without committing to a selection.
+  const heatTileIndex = selectedTileIndex ?? hoverTileIndex ?? null;
+  const heatTile = selectedTile ?? hoverTile ?? null;
 
   const candidates = useMemo(
     () => legalMoves.filter((m) => m.tileIndex === selectedTileIndex && m.flip === flip),
@@ -65,16 +74,13 @@ export function Board(props: Props) {
   const partnerKey = lastPlaced.length > 1 ? key(lastPlaced[1].q, lastPlaced[1].r) : "";
   const lastSet = useMemo(() => new Set(lastPlaced.map((p) => key(p.q, p.r))), [lastPlaced]);
 
-  // Heatmap: for the selected tile, the best score reachable at each cell.
-  // Computed once per (tile, board, legalMoves) — the lazy per-move calc the
-  // shading needs — and reused for every hex below.
+  // Heatmap: for the selected (or hovered) tile, the best score reachable at
+  // each cell, across both orientations. Computed once per (tile, board,
+  // legalMoves) — the lazy per-move calc the shading needs — and reused below.
   const heat = useMemo(() => {
-    if (selectedTileIndex == null || !selectedTile) return null;
-    const map = heatmapFor(state, selectedTile, selectedTileIndex, legalMoves);
-    let max = 0;
-    for (const v of map.values()) max = Math.max(max, v);
-    return { map, max };
-  }, [state, selectedTile, selectedTileIndex, legalMoves]);
+    if (heatTileIndex == null || !heatTile) return null;
+    return heatmapFor(state, heatTile, heatTileIndex, legalMoves);
+  }, [state, heatTile, heatTileIndex, legalMoves]);
 
   const firstColor = selectedTile ? (flip ? selectedTile.b : selectedTile.a) : -1;
   const secondColor = selectedTile ? (flip ? selectedTile.a : selectedTile.b) : -1;
@@ -152,15 +158,11 @@ export function Board(props: Props) {
         const occupied = c.color >= 0;          // a placed/printed gem
         const isLast = lastSet.has(k);          // part of the most recent move
 
-        // heatmap tint for this empty cell, given the selected tile
-        const heatScore = heat ? heat.map.get(k) : undefined;
-        let heatFill: string | undefined;
-        if (heatScore != null && !occupied) {
-          // faint at 0 points, slightly green for bigger scores (normalized to
-          // the best reachable score this turn). Opacity stays subtle.
-          const t = heat!.max > 0 ? heatScore / heat!.max : 0;
-          heatFill = `rgba(40, 170, 90, ${(0.10 + 0.42 * t).toFixed(3)})`;
-        }
+        // heatmap tint for this empty cell, given the selected/hovered tile.
+        // Color is ABSOLUTE (heatColor): hue alone tells you ~how many points a
+        // spot is worth (faint at 1, vivid green at 7+) without comparing cells.
+        const heatScore = heat ? heat.get(k) : undefined;
+        const heatFill = heatScore != null && !occupied ? heatColor(heatScore) : undefined;
         const isAnchor = anchor && anchor.q === c.q && anchor.r === c.r;
         const isPartnerCand = !!anchor && partnerMoves.has(k);
         const isAnchorCand = !anchor && selectedTileIndex != null && anchorSet.has(k);

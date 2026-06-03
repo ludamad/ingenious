@@ -22,6 +22,16 @@ export interface RoomBrief {
   boardRadius: number;
 }
 
+// A chat line. `seat` is the author's seat (-1 for server/system messages);
+// `system` lines are join/leave/drop notices rendered differently.
+export interface ChatMsg {
+  seat: number;
+  name: string;
+  text: string;
+  ts: number;
+  system?: boolean;
+}
+
 // server -> client
 export type ServerMsg =
   | { t: "joined"; roomId: string; seat: number; token: string }
@@ -31,6 +41,8 @@ export type ServerMsg =
       lastPlaced: { q: number; r: number }[]; message: string;
       gameOver: boolean; ranking: number[]; clock?: ClockState }
   | { t: "rooms"; rooms: RoomBrief[] }
+  | { t: "chat"; msg: ChatMsg }                 // one new line
+  | { t: "chatHistory"; msgs: ChatMsg[] }       // recent backlog on (re)join
   | { t: "error"; message: string };
 
 // client -> server
@@ -43,4 +55,5 @@ export type ClientMsg =
   | { t: "move"; tileIndex: number; q: number; r: number; dir: number; flip: number }
   | { t: "swap" }
   | { t: "pass" }
-  | { t: "undo" };
+  | { t: "undo" }
+  | { t: "chat"; text: string };

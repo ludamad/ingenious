@@ -7,8 +7,10 @@
 // full page reload during a game resumes it (see OnlineMatch.hasSession).
 import type { Move } from "../engine/engine";
 import { Emitter, type Match, type Snapshot, type TimerConfig } from "./types";
-import type { ClientMsg, LobbyState, RoomBrief, ServerMsg } from "./protocol";
+import type { ChatMsg, ClientMsg, LobbyState, RoomBrief, ServerMsg } from "./protocol";
 import { wsUrl } from "../net/server";
+
+const CHAT_CAP = 200; // keep the local chat log bounded
 
 const SESSION_KEY = "ingenious.session";
 interface SavedSession { roomId: string; token: string; }
@@ -43,6 +45,8 @@ export class OnlineMatch extends Emitter implements Match {
   private retry = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private awaitingRejoin = false;
+  private chatLog: ChatMsg[] = [];
+  private unread = 0;
 
   // True if a previous tab/session left a game we can try to rejoin on load.
   static hasSession(): boolean { return loadSession() != null; }
@@ -83,6 +87,17 @@ export class OnlineMatch extends Emitter implements Match {
   resuming(): boolean { return this.awaitingRejoin && !this.snap && !this.lobbyState; }
   start() { this.send({ t: "start" }); }
   inGame(): boolean { return this.snap != null; }
+
+  // --- chat ---
+  chat(): ChatMsg[] { return this.chatLog; }
+  unreadChat(): number { return this.unread; }
+  markChatRead() { if (this.unread) { this.unread = 0; this.bump(); } }
+  sendChat(text: string) {
+    const t = text.trim();
+    if (t) this.send({ t: "chat", text: t });
+  }
+  // link state for the UI: are we connected, or trying to recover?
+  connection(): Link { return this.link; }
 
   // --- Match impl ---
   snapshot(): Snapshot {
@@ -175,6 +190,15 @@ export class OnlineMatch extends Emitter implements Match {
         break;
       case "lobby": this.lobbyState = msg.lobby; this.awaitingRejoin = false; break;
       case "rooms": this.roomList = msg.rooms; break;
+      case "chatHistory":
+        // Replace the local log with the server backlog (de-duped on (re)join).
+        this.chatLog = msg.msgs.slice(-CHAT_CAP);
+        break;
+      case "chat":
+        this.chatLog = [...this.chatLog, msg.msg].slice(-CHAT_CAP);
+        // count unread for anything not authored by us
+        if (msg.msg.seat !== this.seat) this.unread++;
+        break;
       case "error":
         this.err = msg.message;
         // A failed rejoin means the seat/room is gone — stop chasing it and

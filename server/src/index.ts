@@ -8,8 +8,11 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, normalize, extname } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { loadEngine, type Game } from "./engine.js";
-import type { ClientMsg, ServerMsg, LobbyState, PlayerInfo, TimerConfig } from "./protocol.js";
+import type { ClientMsg, ServerMsg, LobbyState, PlayerInfo, TimerConfig, ChatMsg } from "./protocol.js";
 import { Clock } from "./clock.js";
+
+const CHAT_HISTORY = 60; // recent chat lines kept per room and replayed on (re)join
+const CHAT_MAX_LEN = 300;
 
 const DEFAULT_TIMER: TimerConfig = { mode: "off" };
 
@@ -20,7 +23,7 @@ const CPU_DELAY = 550;
 // turn, and how long to keep an abandoned (everyone-gone) room alive so the
 // players can come back to it.
 const DISCONNECT_GRACE = 15000;
-const ROOM_REAP_DELAY = 120000;
+const ROOM_REAP_DELAY = 300000; // keep an abandoned game alive 5 min for rejoins
 const COLOR_NAMES = ["red", "orange", "yellow", "green", "blue", "purple"];
 
 interface Seat {
@@ -54,6 +57,7 @@ interface Room {
   clock: Clock | null;              // live once started (if timer active)
   flagTimer: NodeJS.Timeout | null; // fires when the running seat would flag
   timedOut: boolean;                // a seat ran out -> game over, flagged lose
+  chat: ChatMsg[];                  // recent chat history (capped)
 }
 interface Ctx { roomId: string; seat: number; }
 
@@ -124,6 +128,20 @@ function broadcastRooms() {
 
 function players(room: Room): PlayerInfo[] {
   return room.seats.map((s) => ({ name: s.name, type: s.type, connected: s.connected }));
+}
+
+// ---------- chat ----------
+function pushChat(room: Room, msg: ChatMsg) {
+  room.chat.push(msg);
+  if (room.chat.length > CHAT_HISTORY) room.chat.splice(0, room.chat.length - CHAT_HISTORY);
+  for (const s of room.seats) send(s.ws, { t: "chat", msg });
+}
+// A server-authored system line (joins/leaves/drops/reconnects/game events).
+function systemChat(room: Room, text: string) {
+  pushChat(room, { seat: -1, name: "", text, ts: Date.now(), system: true });
+}
+function sendChatHistory(ws: WebSocket, room: Room) {
+  if (room.chat.length) send(ws, { t: "chatHistory", msgs: room.chat });
 }
 
 // Ranking when a seat has flagged: flagged seats lose (ordered last), the rest
@@ -212,6 +230,7 @@ function onFlag(room: Room, seat: number) {
   clearTimer(room);
   clearFlagTimer(room);
   room.message = `${room.seats[seat].name} ran out of time.`;
+  systemChat(room, `⏱ ${room.seats[seat].name} ran out of time and loses.`);
   broadcast(room);
 }
 
@@ -301,10 +320,21 @@ function handle(ws: WebSocket, msg: ClientMsg) {
     case "rejoin": return doRejoin(ws, msg);
     case "start": return doStart(ws);
     case "undo": return doUndo(ws);
+    case "chat": return doChat(ws, msg);
     case "move":
     case "swap":
     case "pass": return doAction(ws, msg);
   }
+}
+
+function doChat(ws: WebSocket, msg: Extract<ClientMsg, { t: "chat" }>) {
+  const ctx = ctxOf.get(ws); if (!ctx) return;
+  const room = rooms.get(ctx.roomId); if (!room) return;
+  const seat = room.seats[ctx.seat];
+  if (!seat || seat.ws !== ws) return;
+  const text = (msg.text ?? "").toString().replace(/\s+/g, " ").trim().slice(0, CHAT_MAX_LEN);
+  if (!text) return;
+  pushChat(room, { seat: ctx.seat, name: seat.name, text, ts: Date.now() });
 }
 
 // Clamp a client-supplied timer config to sane bounds (don't trust the wire).
@@ -339,7 +369,7 @@ function doCreate(ws: WebSocket, msg: Extract<ClientMsg, { t: "create" }>) {
   const timer = sanitizeTimer(msg.timer);
   const room: Room = { id, numPlayers: n, seats, seed: (Math.floor(Math.random() * 0x7fffffff) + 1),
     boardRadius: msg.boardRadius | 0, started: false, game: null, history: [], lastPlaced: [], message: "",
-    cpuTimer: null, reapTimer: null, timer, clock: null, flagTimer: null, timedOut: false };
+    cpuTimer: null, reapTimer: null, timer, clock: null, flagTimer: null, timedOut: false, chat: [] };
   rooms.set(id, room);
   browsing.delete(ws);
   ctxOf.set(ws, { roomId: id, seat: 0 });
@@ -359,6 +389,8 @@ function doJoin(ws: WebSocket, msg: Extract<ClientMsg, { t: "join" }>) {
   browsing.delete(ws);
   ctxOf.set(ws, { roomId: room.id, seat: seatIdx });
   send(ws, { t: "joined", roomId: room.id, seat: seatIdx, token: seat.token });
+  sendChatHistory(ws, room);
+  systemChat(room, `${seat.name} joined.`);
   broadcastLobby(room);
 }
 
@@ -374,10 +406,13 @@ function doRejoin(ws: WebSocket, msg: Extract<ClientMsg, { t: "rejoin" }>) {
   if (seat.ws && seat.ws !== ws) { try { seat.ws.close(); } catch { /* ignore */ } }
   cancelReap(room);
   room.clock?.resume(); // unfreeze clocks now someone is back
+  const wasDown = !seat.connected;
   seat.ws = ws; seat.connected = true;
   browsing.delete(ws);
   ctxOf.set(ws, { roomId: room.id, seat: seatIdx });
   send(ws, { t: "joined", roomId: room.id, seat: seatIdx, token: seat.token });
+  sendChatHistory(ws, room);
+  if (wasDown) systemChat(room, `${seat.name} reconnected.`);
   if (room.started && room.game) {
     room.message = `${seat.name} reconnected.`;
     step(room); // re-broadcast live state and recompute autopilot
@@ -415,6 +450,7 @@ function doStart(ws: WebSocket) {
   room.timedOut = false;
   room.clock = room.timer.mode !== "off" ? new Clock(room.timer, room.numPlayers) : null;
   room.message = "Game started — first round: play next to a printed symbol.";
+  systemChat(room, `Game on! ${room.seats[room.game.current()].name} goes first.`);
   broadcastRooms(); // room is no longer open to join
   step(room);
 }
@@ -482,11 +518,13 @@ function onClose(ws: WebSocket) {
   const room = rooms.get(ctx.roomId); if (!room) return;
   const seat = room.seats[ctx.seat];
   if (!seat || seat.ws !== ws) return;
+  const droppedName = seat.name;
   seat.ws = null; seat.connected = false;
 
   if (!room.started) {
     // free the seat again for someone else (and retire its rejoin token)
     if (!seat.isHost) { seat.name = `Seat ${ctx.seat + 1}`; seat.token = ""; }
+    systemChat(room, `${droppedName} left.`);
     // if nobody is connected, drop the room
     if (room.seats.every((s) => s.ws == null)) rooms.delete(room.id);
     broadcastLobby(room);
@@ -497,10 +535,12 @@ function onClose(ws: WebSocket) {
   // reconnect with their token. step() auto-pilots their turns in the meantime.
   if (room.seats.every((s) => s.ws == null)) {
     // nobody left watching — hold the room briefly for reconnects, then reap it
+    systemChat(room, `${droppedName} disconnected — game paused for reconnects.`);
     scheduleReap(room);
     return;
   }
-  room.message = `${seat.name} disconnected — others continue.`;
+  systemChat(room, `${droppedName} disconnected — auto-playing until they return.`);
+  room.message = `${droppedName} disconnected — others continue.`;
   step(room);
 }
 

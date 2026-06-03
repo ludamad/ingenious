@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from "react";
 import type { OnlineMatch } from "../match/OnlineMatch";
 import { timerLabel } from "./TimerSettings";
+import { Chat } from "./Chat";
 
 export function Lobby({ match, onLeave }: { match: OnlineMatch; onLeave: () => void }) {
   useSyncExternalStore((cb) => match.onUpdate(cb), () => match.lobby());
@@ -50,6 +51,7 @@ export function Lobby({ match, onLeave }: { match: OnlineMatch; onLeave: () => v
       ) : (
         <p className="hint">Waiting for the host to start…</p>
       )}
+      <Chat match={match} />
       <button className="ghost" onClick={onLeave}>Leave</button>
     </div></div>
   );
