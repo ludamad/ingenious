@@ -8,10 +8,12 @@
 import type { Game, Move } from "../engine/engine";
 import { loadEngine } from "../engine/engine";
 import { PALETTE } from "../hex";
-import { Emitter, type Match, type PlayerInfo, type Snapshot } from "./types";
+import { Clock } from "./clock";
+import { DEFAULT_TIMER, Emitter, type Match, type PlayerInfo, type Snapshot, type TimerConfig } from "./types";
 
 const CPU_DELAY = 420;
 const PREVIEW_HOLD = 360;
+const TICK_MS = 250;
 
 type Action =
   | { kind: "move"; seat: number; m: Move }
@@ -29,41 +31,71 @@ export class LocalMatch extends Emitter implements Match {
   private timer: number | null = null;
   private disposed = false;
   private snap!: Snapshot;
+  private clock: Clock;
+  private clockTick: number | null = null;
+  private timedOut = false; // a seat flagged -> game ends, flagged seats lose
 
-  static async create(players: PlayerInfo[], seed: number, boardRadius: number): Promise<LocalMatch> {
+  static async create(players: PlayerInfo[], seed: number, boardRadius: number,
+    timer: TimerConfig = DEFAULT_TIMER): Promise<LocalMatch> {
     const M = await loadEngine();
     const make = () => new M.Game(players.length, seed, boardRadius);
-    return new LocalMatch(make, players);
+    return new LocalMatch(make, players, timer);
   }
 
-  private constructor(make: () => Game, players: PlayerInfo[]) {
+  private constructor(make: () => Game, players: PlayerInfo[], timer: TimerConfig) {
     super();
     this.make = make;
     this.g = make();
     this.players = players;
+    this.clock = new Clock(timer, players.length);
+    this.clock.sync(this.g.current(), false);
+    this.startClockTick();
     this.message = this.turnMessage();
     this.rebuild();
     this.maybeAuto();
   }
 
+  // Drive the clock display and detect flag-fall. The running seat's remaining
+  // time is computed from the snapshot in the UI, but we still poll so a timeout
+  // ends the game even if no one acts.
+  private startClockTick() {
+    if (!this.clock.active() || this.clockTick != null) return;
+    this.clockTick = window.setInterval(() => {
+      if (this.disposed || this.timedOut) return;
+      const seat = this.clock.check();
+      if (seat != null) this.onFlag(seat);
+      else this.refresh(); // keep clock display live
+    }, TICK_MS);
+  }
+
+  private onFlag(seat: number) {
+    this.timedOut = true;
+    if (this.clockTick != null) { clearInterval(this.clockTick); this.clockTick = null; }
+    if (this.timer != null) { clearTimeout(this.timer); this.timer = null; }
+    this.preview = null;
+    this.message = `${this.players[seat].name} ran out of time.`;
+    this.refresh();
+  }
+
   snapshot(): Snapshot { return this.snap; }
 
   place(m: Move) {
-    if (this.players[this.g.current()]?.type !== "human") return;
+    if (this.timedOut || this.players[this.g.current()]?.type !== "human") return;
     this.doMove(m);
   }
   swap() {
-    if (this.players[this.g.current()]?.type !== "human") return;
+    if (this.timedOut || this.players[this.g.current()]?.type !== "human") return;
     if (this.applySwap()) { this.message = this.turnMessage(); this.refresh(); this.maybeAuto(); }
   }
   pass() {
-    if (this.players[this.g.current()]?.type !== "human") return;
+    if (this.timedOut || this.players[this.g.current()]?.type !== "human") return;
     if (this.applyPass()) { this.message = this.turnMessage(); this.refresh(); this.maybeAuto(); }
   }
 
   // Revert to just before the most recent human-controlled action (and any CPU
   // moves that followed it), so it's the human's decision again.
   undo() {
+    if (this.timedOut) return;
     let cut = -1;
     for (let i = this.history.length - 1; i >= 0; i--) {
       if (this.players[this.history[i].seat]?.type === "human") { cut = i; break; }
@@ -85,6 +117,7 @@ export class LocalMatch extends Emitter implements Match {
       ? [{ q: last.m.q, r: last.m.r }, { q: last.m.q + DIRS[last.m.dir][0], r: last.m.r + DIRS[last.m.dir][1] }]
       : [];
     this.preview = null;
+    this.clock.sync(this.g.current(), false);
     this.message = `Undo — ${this.turnMessage()}`;
     this.refresh();
     // current is the human whose action we removed, so no CPU auto-play here
@@ -93,7 +126,18 @@ export class LocalMatch extends Emitter implements Match {
   dispose() {
     this.disposed = true;
     if (this.timer != null) clearTimeout(this.timer);
+    if (this.clockTick != null) { clearInterval(this.clockTick); this.clockTick = null; }
     try { this.g.delete(); } catch { /* already freed */ }
+  }
+
+  // Ranking when a seat has flagged: flagged seats lose (ordered last), the rest
+  // keep the engine's ranking among themselves.
+  private timeoutRanking(): number[] {
+    const flagged = this.clock.flaggedSeats();
+    const flaggedSet = new Set(flagged);
+    const survivors = this.g.ranking().filter((p) => !flaggedSet.has(p));
+    const losers = this.players.map((_, i) => i).filter((p) => flaggedSet.has(p));
+    return [...survivors, ...losers];
   }
 
   // --- internals ---
@@ -104,7 +148,8 @@ export class LocalMatch extends Emitter implements Match {
   private rebuild() {
     const state = this.g.state();
     const cur = state.current;
-    const curHuman = !state.finished && this.players[cur]?.type === "human";
+    const over = state.finished || this.timedOut;
+    const curHuman = !over && this.players[cur]?.type === "human";
     this.snap = {
       state,
       handCounts: state.hands.map((h) => h.length),
@@ -112,14 +157,15 @@ export class LocalMatch extends Emitter implements Match {
       mySeat: curHuman ? cur : null,
       yourTurn: curHuman,
       legalMoves: curHuman ? this.g.legalMoves() : [],
-      canSwap: this.g.canSwap(),
-      canUndo: this.canUndo(),
+      canSwap: !this.timedOut && this.g.canSwap(),
+      canUndo: !this.timedOut && this.canUndo(),
       pendingBonus: state.pendingBonus,
       lastPlaced: this.lastPlaced,
       previewMove: this.preview,
       message: this.message,
-      gameOver: state.finished,
-      ranking: state.finished ? this.g.ranking() : [],
+      gameOver: over,
+      ranking: over ? (this.timedOut ? this.timeoutRanking() : this.g.ranking()) : [],
+      clock: this.clock.active() ? this.clock.state() : undefined,
     };
   }
   private refresh() { this.rebuild(); this.emit(); }
@@ -156,8 +202,10 @@ export class LocalMatch extends Emitter implements Match {
   }
 
   private maybeAuto() {
-    if (this.disposed) return;
+    if (this.disposed || this.timedOut) return;
     if (this.timer != null) { clearTimeout(this.timer); this.timer = null; }
+    // hand the clock to whoever is current now (turn change / bonus / game end)
+    this.clock.sync(this.g.current(), this.g.finished());
     if (this.g.finished()) { this.message = "Game over."; this.refresh(); return; }
     const cur = this.g.current();
     const p = this.players[cur];

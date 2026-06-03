@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { axialToPixel, hexPoints, DIRS, PALETTE, HEX_SIZE } from "../hex";
 import { Symbol } from "./Symbol";
+import { heatmapFor } from "../engine/score";
 import type { GameState, Move, Tile } from "../engine/engine";
 
 const key = (q: number, r: number) => `${q},${r}`;
@@ -17,6 +18,8 @@ interface Props {
   previewMove: { q: number; r: number; dir: number; a: number; b: number } | null;
   onSelectAnchor: (cell: { q: number; r: number } | null) => void;
   onPlace: (m: Move) => void;
+  // explain to the player why a cell they clicked can't take their tile
+  onExplain?: (reason: string) => void;
 }
 
 export function Board(props: Props) {
@@ -41,12 +44,16 @@ export function Board(props: Props) {
 
   const { viewBox, cells } = useMemo(() => {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    const cs = state.cells.map((c) => {
-      const p = axialToPixel(c.q, c.r);
-      minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
-      maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
-      return { ...c, ...p };
-    });
+    // Drop reserved/inactive rings (color -3) used only by larger player counts,
+    // so the view zooms to just the playable region instead of the full board.
+    const cs = state.cells
+      .filter((c) => c.color !== -3)
+      .map((c) => {
+        const p = axialToPixel(c.q, c.r);
+        minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+        maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y);
+        return { ...c, ...p };
+      });
     const pad = HEX_SIZE * 1.4;
     return {
       cells: cs,
@@ -56,6 +63,18 @@ export function Board(props: Props) {
 
   // the partner half of the last move animates in slightly after the anchor half
   const partnerKey = lastPlaced.length > 1 ? key(lastPlaced[1].q, lastPlaced[1].r) : "";
+  const lastSet = useMemo(() => new Set(lastPlaced.map((p) => key(p.q, p.r))), [lastPlaced]);
+
+  // Heatmap: for the selected tile, the best score reachable at each cell.
+  // Computed once per (tile, board, legalMoves) — the lazy per-move calc the
+  // shading needs — and reused for every hex below.
+  const heat = useMemo(() => {
+    if (selectedTileIndex == null || !selectedTile) return null;
+    const map = heatmapFor(state, selectedTile, selectedTileIndex, legalMoves);
+    let max = 0;
+    for (const v of map.values()) max = Math.max(max, v);
+    return { map, max };
+  }, [state, selectedTile, selectedTileIndex, legalMoves]);
 
   const firstColor = selectedTile ? (flip ? selectedTile.b : selectedTile.a) : -1;
   const secondColor = selectedTile ? (flip ? selectedTile.a : selectedTile.b) : -1;
@@ -65,13 +84,48 @@ export function Board(props: Props) {
   const prevPartnerKey = previewMove
     ? key(previewMove.q + DIRS[previewMove.dir][0], previewMove.r + DIRS[previewMove.dir][1]) : "";
 
+  // All cells any tile could legally occupy this turn (anchor or partner), used
+  // to distinguish "this tile won't fit here" from "nothing fits here".
+  const anyPlayableCell = useMemo(() => {
+    const s = new Set<string>();
+    for (const m of legalMoves) {
+      s.add(key(m.q, m.r));
+      s.add(key(m.q + DIRS[m.dir][0], m.r + DIRS[m.dir][1]));
+    }
+    return s;
+  }, [legalMoves]);
+
+  const cellColor = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of state.cells) m.set(key(c.q, c.r), c.color);
+    return m;
+  }, [state.cells]);
+  const hasEmptyNeighbor = (q: number, r: number) =>
+    DIRS.some(([dq, dr]) => cellColor.get(key(q + dq, r + dr)) === -1);
+
+  // Why can't the current tile go in this (empty) cell? Returns a short reason.
+  function explain(q: number, r: number): string {
+    const k = key(q, r);
+    if (selectedTileIndex == null) return "Pick a tile from your rack first.";
+    if (anchor) {
+      return "That's not the cell for this tile's other half — pick a highlighted cell, or tap the anchor again to undo.";
+    }
+    if (!hasEmptyNeighbor(q, r)) return "No room here — a tile needs two adjacent empty cells.";
+    if (state.firstRound && !anyPlayableCell.has(k)) {
+      return "First move must touch one of the printed symbols that no one has claimed yet.";
+    }
+    if (anyPlayableCell.has(k)) return "This tile doesn't fit here — try flipping it or pick another tile.";
+    return "No legal placement here for this tile.";
+  }
+
   function clickCell(q: number, r: number, color: number) {
-    if (!interactive || selectedTileIndex == null) return;
+    if (!interactive) return;
     if (color !== -1) return;
     const k = key(q, r);
     if (anchor && anchor.q === q && anchor.r === r) { props.onSelectAnchor(null); return; }
     if (anchor && partnerMoves.has(k)) { props.onPlace(partnerMoves.get(k)!); return; }
-    if (anchorSet.has(k)) { props.onSelectAnchor({ q, r }); return; }
+    if (!anchor && anchorSet.has(k)) { props.onSelectAnchor({ q, r }); return; }
+    props.onExplain?.(explain(q, r));
   }
 
   return (
@@ -96,6 +150,17 @@ export function Board(props: Props) {
         const k = key(c.q, c.r);
         const inactive = c.color === -3;       // reserved outer ring (fewer players)
         const occupied = c.color >= 0;          // a placed/printed gem
+        const isLast = lastSet.has(k);          // part of the most recent move
+
+        // heatmap tint for this empty cell, given the selected tile
+        const heatScore = heat ? heat.map.get(k) : undefined;
+        let heatFill: string | undefined;
+        if (heatScore != null && !occupied) {
+          // faint at 0 points, slightly green for bigger scores (normalized to
+          // the best reachable score this turn). Opacity stays subtle.
+          const t = heat!.max > 0 ? heatScore / heat!.max : 0;
+          heatFill = `rgba(40, 170, 90, ${(0.10 + 0.42 * t).toFixed(3)})`;
+        }
         const isAnchor = anchor && anchor.q === c.q && anchor.r === c.r;
         const isPartnerCand = !!anchor && partnerMoves.has(k);
         const isAnchorCand = !anchor && selectedTileIndex != null && anchorSet.has(k);
@@ -118,6 +183,12 @@ export function Board(props: Props) {
               stroke={inactive ? "#c0ccda" : occupied ? PALETTE[c.color].dark : "#9fb3c8"}
               strokeWidth={occupied ? 1.5 : 1}
               filter={occupied ? "url(#soft)" : undefined} />
+            {/* heatmap tint: how many points the selected tile could score here */}
+            {heatFill && (
+              <polygon className="heat" points={hexPoints(0, 0)} fill={heatFill}>
+                <title>{`Up to ${heatScore} point${heatScore === 1 ? "" : "s"} here`}</title>
+              </polygon>
+            )}
             {occupied && (
               <g className="gem-enter" style={k === partnerKey ? { animationDelay: "0.18s" } : undefined}>
                 <Symbol color={c.color} />
@@ -131,6 +202,9 @@ export function Board(props: Props) {
             {/* opponent preview ghosts */}
             {isPrevA && <g className="ghost-a"><Symbol color={previewMove!.a} /></g>}
             {isPrevB && <g className="ghost-b"><Symbol color={previewMove!.b} /></g>}
+
+            {/* outline around the most recently placed tile */}
+            {isLast && <polygon className="last-outline" points={hexPoints(0, 0)} />}
           </g>
         );
       })}

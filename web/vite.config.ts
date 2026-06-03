@@ -1,9 +1,11 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// `base` is the GitHub Pages project subpath in production, root in dev.
-export default defineConfig(({ command }) => ({
-  base: command === "build" ? "/ingenious/" : "/",
+// Relative base so the built assets resolve no matter where the app is mounted:
+// the GitHub Pages project subpath (/ingenious/) and the self-hosted server that
+// serves the bundle from the root (/) both work.
+export default defineConfig(() => ({
+  base: "./",
   plugins: [react()],
   server: {
     port: 5173,

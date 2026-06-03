@@ -91,6 +91,25 @@ export const sound = {
     const t = ac().currentTime;
     [392, 523, 659, 784, 1047].forEach((f, i) => note(f, t + i * 0.12, 0.32, { type: "triangle", gain: 0.15 }));
   },
+  // Triumphant victory fanfare: a rising run capped by a held major chord and a
+  // sparkly high flourish.
+  win() {
+    if (muted) return;
+    const t = ac().currentTime;
+    [523, 659, 784, 1047, 1319].forEach((f, i) =>
+      note(f, t + i * 0.1, 0.26, { type: "triangle", gain: 0.16 }));         // fanfare run
+    [523, 659, 784, 1047].forEach((f) =>
+      note(f, t + 0.5, 0.9, { type: "triangle", gain: 0.11 }));              // held C major chord
+    [1568, 2093, 2637].forEach((f, i) =>
+      note(f, t + 0.66 + i * 0.07, 0.18, { type: "sine", gain: 0.07 }));     // sparkle
+  },
+  // Gentle, non-punishing "you lost" cadence — two soft falling notes.
+  lose() {
+    if (muted) return;
+    const t = ac().currentTime;
+    note(440, t, 0.3, { type: "sine", gain: 0.12, glideTo: 392 });
+    note(330, t + 0.26, 0.5, { type: "sine", gain: 0.11, glideTo: 262 });
+  },
   undo() {
     if (muted) return;
     const t = ac().currentTime;

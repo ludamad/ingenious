@@ -4,6 +4,8 @@
 // result, so it's highlighted.
 import { PALETTE } from "../hex";
 import { Symbol } from "./Symbol";
+import { ClockBadge } from "./Clock";
+import type { ClockState } from "../match/types";
 
 interface Props {
   name: string;
@@ -12,19 +14,29 @@ interface Props {
   active: boolean;
   isYou: boolean;
   result: number;
+  cpu?: boolean;   // a CPU seat
+  away?: boolean;  // a human who has dropped and is being auto-played
+  clock?: ClockState; // present when a timer is active
+  seat: number;       // this panel's seat index (for the clock)
 }
 
-export function ScorePanel({ name, scores, cap, active, isYou, result }: Props) {
+export function ScorePanel({ name, scores, cap, active, isYou, result, cpu, away, clock, seat }: Props) {
   const lowest = Math.min(...scores);
   // render discrete holes for the standard 0..18 track; for the long solitaire
   // track (0..36) fall back to a smooth rail so it stays compact.
   const showHoles = cap <= 18;
 
   return (
-    <div className={"score-panel" + (active ? " active" : "")}>
+    <div className={"score-panel" + (active ? " active" : "") + (away ? " away" : "")}>
       <div className="score-head">
-        <span className="pname">{name}{isYou ? " (you)" : ""}</span>
-        <span className="presult" title="Lowest counter = your result">{result}</span>
+        <span className="pname">
+          {name}{cpu ? " 🤖" : ""}{isYou ? " (you)" : ""}
+          {away && <span className="away-tag" title="Disconnected — auto-playing until they reconnect">💤 away</span>}
+        </span>
+        <span className="score-head-right">
+          {clock && clock.mode !== "off" && <ClockBadge clock={clock} seat={seat} active={active} />}
+          <span className="presult" title="Lowest counter = your result">{result}</span>
+        </span>
       </div>
       <div className="tracks">
         {scores.map((v, c) => {

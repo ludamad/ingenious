@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useSyncExternalStore } from "react";
 import type { OnlineMatch } from "../match/OnlineMatch";
 import { MIN_RADIUS, MAX_RADIUS, STANDARD_RADIUS, cellsAcross } from "../board";
+import { DEFAULT_TIMER, type TimerConfig } from "../match/types";
+import { TimerSettings } from "./TimerSettings";
 
 export function Browse({ match, onLeave }: { match: OnlineMatch; onLeave: () => void }) {
   useSyncExternalStore((cb) => match.onUpdate(cb), () => match.version());
@@ -15,12 +17,13 @@ export function Browse({ match, onLeave }: { match: OnlineMatch; onLeave: () => 
   const [radius, setRadius] = useState(STANDARD_RADIUS);
   const [code, setCode] = useState("");
   const [advOpen, setAdvOpen] = useState(false);
+  const [timer, setTimer] = useState<TimerConfig>(DEFAULT_TIMER);
 
   const myName = name.trim() || "Player";
 
   function create() {
     const cpuSeats = fillCpu ? Array.from({ length: players - 1 }, (_, i) => i + 1) : [];
-    match.create(players, cpuSeats, 1, radius, myName);
+    match.create(players, cpuSeats, 1, radius, myName, timer);
   }
 
   return (
@@ -77,6 +80,7 @@ export function Browse({ match, onLeave }: { match: OnlineMatch; onLeave: () => 
                 <input type="checkbox" checked={fillCpu} onChange={(e) => setFillCpu(e.target.checked)} />
                 <span>Fill empty seats with CPU</span>
               </label>
+              <TimerSettings value={timer} onChange={setTimer} />
               <div className="advanced">
                 <button className="adv-toggle" onClick={() => setAdvOpen((o) => !o)}>{advOpen ? "▾" : "▸"} Options</button>
                 {advOpen && (

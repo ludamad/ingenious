@@ -22,6 +22,7 @@ function hexPath(rad: number): string {
 
 export function Symbol({ color, size = 13 }: { color: number; size?: number }) {
   const p = PALETTE[color];
+  if (!p) return null; // redacted/empty (-1) or out-of-range color: render nothing
   const stroke = p.dark;
   const fill = p.base;
   switch (color) {

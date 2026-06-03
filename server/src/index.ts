@@ -8,11 +8,19 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, normalize, extname } from "node:path";
 import { WebSocketServer, WebSocket } from "ws";
 import { loadEngine, type Game } from "./engine.js";
-import type { ClientMsg, ServerMsg, LobbyState, PlayerInfo } from "./protocol.js";
+import type { ClientMsg, ServerMsg, LobbyState, PlayerInfo, TimerConfig } from "./protocol.js";
+import { Clock } from "./clock.js";
+
+const DEFAULT_TIMER: TimerConfig = { mode: "off" };
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT ?? 8787);
 const CPU_DELAY = 550;
+// How long to wait for a dropped human to reconnect before auto-piloting their
+// turn, and how long to keep an abandoned (everyone-gone) room alive so the
+// players can come back to it.
+const DISCONNECT_GRACE = 15000;
+const ROOM_REAP_DELAY = 120000;
 const COLOR_NAMES = ["red", "orange", "yellow", "green", "blue", "purple"];
 
 interface Seat {
@@ -22,6 +30,7 @@ interface Seat {
   connected: boolean;
   aiLevel: number;
   isHost: boolean;
+  token: string; // secret a human presents to reclaim this seat after a drop ("" for CPU)
 }
 type Action =
   | { kind: "move"; seat: number; tileIndex: number; q: number; r: number; dir: number; flip: number }
@@ -40,6 +49,11 @@ interface Room {
   lastPlaced: { q: number; r: number }[];
   message: string;
   cpuTimer: NodeJS.Timeout | null;
+  reapTimer: NodeJS.Timeout | null; // pending deletion of an abandoned room
+  timer: TimerConfig;               // configured at create time
+  clock: Clock | null;              // live once started (if timer active)
+  flagTimer: NodeJS.Timeout | null; // fires when the running seat would flag
+  timedOut: boolean;                // a seat ran out -> game over, flagged lose
 }
 interface Ctx { roomId: string; seat: number; }
 
@@ -50,6 +64,16 @@ let EngineModule: Awaited<ReturnType<typeof loadEngine>>;
 
 // ---------- helpers ----------
 function seatFilled(s: Seat): boolean { return s.type === "cpu" || (s.type === "human" && s.ws != null); }
+
+// A seat plays itself when it's a CPU, or a human who has dropped — that keeps
+// the game moving without permanently kicking a player who can still reconnect.
+function autopilots(s: Seat): boolean { return s.type === "cpu" || !s.connected; }
+
+function newToken(): string {
+  let t = "";
+  for (let i = 0; i < 3; i++) t += Math.floor(Math.random() * 0x100000000).toString(36);
+  return t;
+}
 
 function newRoomId(): string {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -71,6 +95,7 @@ function lobbyState(room: Room): LobbyState {
     numPlayers: room.numPlayers,
     started: room.started,
     seats: room.seats.map((s) => ({ type: s.type, name: s.name, filled: seatFilled(s), isHost: s.isHost })),
+    timer: room.timer,
   };
 }
 function broadcastLobby(room: Room) {
@@ -101,22 +126,32 @@ function players(room: Room): PlayerInfo[] {
   return room.seats.map((s) => ({ name: s.name, type: s.type, connected: s.connected }));
 }
 
+// Ranking when a seat has flagged: flagged seats lose (ordered last), the rest
+// keep the engine's ranking among themselves.
+function timeoutRanking(room: Room): number[] {
+  const flagged = new Set(room.clock?.flaggedSeats() ?? []);
+  const survivors = (room.game?.ranking() ?? []).filter((p) => !flagged.has(p));
+  const losers = room.seats.map((_, i) => i).filter((p) => flagged.has(p));
+  return [...survivors, ...losers];
+}
+
 function broadcast(room: Room) {
   const g = room.game;
   if (!g) return;
   const state = g.state();
   const current = g.current();
-  const finished = g.finished();
-  const canSwap = g.canSwap();
-  const ranking = finished ? g.ranking() : [];
+  const finished = g.finished() || room.timedOut;
+  const canSwap = !room.timedOut && g.canSwap();
+  const ranking = finished ? (room.timedOut ? timeoutRanking(room) : g.ranking()) : [];
   const handCounts = state.hands.map((h: any[]) => h.length);
+  const clock = room.clock?.active() ? room.clock.state() : undefined;
   // a human may undo their own last action, but only while no one has acted since
   const lastSeat = room.history.length ? room.history[room.history.length - 1].seat : -1;
 
   for (let seat = 0; seat < room.seats.length; seat++) {
     const ws = room.seats[seat].ws;
     if (!ws) continue;
-    const canUndo = lastSeat === seat && room.seats[seat].type === "human";
+    const canUndo = !room.timedOut && lastSeat === seat && room.seats[seat].type === "human";
     // redact: only the viewer's own rack is revealed
     const redactedHands = state.hands.map((h: any[], i: number) =>
       i === seat ? h : h.map(() => ({ a: -1, b: -1 })));
@@ -134,6 +169,7 @@ function broadcast(room: Room) {
       message: room.message,
       gameOver: finished,
       ranking,
+      clock,
     };
     send(ws, msg);
   }
@@ -148,23 +184,84 @@ function describe(room: Room, mover: number, res: { deltas: { color: number; poi
 }
 
 function clearTimer(room: Room) { if (room.cpuTimer) { clearTimeout(room.cpuTimer); room.cpuTimer = null; } }
+function cancelReap(room: Room) { if (room.reapTimer) { clearTimeout(room.reapTimer); room.reapTimer = null; } }
+function clearFlagTimer(room: Room) { if (room.flagTimer) { clearTimeout(room.flagTimer); room.flagTimer = null; } }
 
-// Drive the game forward: broadcast, then auto-resolve CPU seats and stuck humans.
+// Point the room clock at the current seat and arm a timer to fire exactly when
+// that seat would run out of time. Called from step() on every position change.
+function syncClock(room: Room) {
+  const c = room.clock, g = room.game;
+  if (!c || !c.active() || !g) return;
+  clearFlagTimer(room);
+  if (room.timedOut) return;
+  c.sync(g.current(), g.finished());
+  if (g.finished()) return;
+  const ms = c.msUntilFlag();
+  if (ms === Infinity) return;
+  room.flagTimer = setTimeout(() => {
+    room.flagTimer = null;
+    const seat = c.check();
+    if (seat == null) { step(room); return; } // not actually out yet — re-arm
+    onFlag(room, seat);
+  }, ms + 20); // small cushion so check() sees the seat as expired
+}
+
+// A seat ran out of time: end the game; flagged seats lose (ranked last).
+function onFlag(room: Room, seat: number) {
+  room.timedOut = true;
+  clearTimer(room);
+  clearFlagTimer(room);
+  room.message = `${room.seats[seat].name} ran out of time.`;
+  broadcast(room);
+}
+
+// Everyone has dropped: keep the room (and its game) around for a while so the
+// players can reconnect, then delete it if nobody comes back.
+function scheduleReap(room: Room) {
+  cancelReap(room);
+  clearTimer(room);
+  clearFlagTimer(room);
+  room.clock?.pause(); // freeze clocks while everyone is away
+  room.reapTimer = setTimeout(() => {
+    room.reapTimer = null;
+    if (room.seats.every((s) => s.ws == null)) {
+      clearTimer(room);
+      clearFlagTimer(room);
+      try { room.game?.delete(); } catch { /* ignore */ }
+      rooms.delete(room.id);
+      broadcastRooms();
+    }
+  }, ROOM_REAP_DELAY);
+}
+
+// Drive the game forward: broadcast, then auto-resolve CPU seats, dropped
+// humans (after a grace period), and stuck humans.
 function step(room: Room) {
+  // Re-evaluating the position invalidates any pending autopilot tick (e.g. the
+  // grace timer for a seat whose player just reconnected); the branches below
+  // reschedule one if it's still needed.
+  clearTimer(room);
+  if (room.timedOut) { broadcast(room); return; }
+  // Hand the clock to whoever is current now and (re)arm the flag timer.
+  syncClock(room);
   broadcast(room);
   const g = room.game;
-  if (!g || g.finished()) { clearTimer(room); return; }
+  if (!g || g.finished()) return;
   const cur = g.current();
   const seat = room.seats[cur];
 
-  if (seat.type === "cpu") {
-    clearTimer(room);
+  if (autopilots(seat)) {
+    // Give a dropped human a chance to come back before the AI takes their turn.
+    const delay = seat.type === "cpu" ? CPU_DELAY : DISCONNECT_GRACE;
     room.cpuTimer = setTimeout(() => {
       room.cpuTimer = null;
       if (!room.game) return;
+      // The player may have reconnected during the grace window — if so, hand
+      // control back to them instead of auto-playing.
+      if (!autopilots(room.seats[room.game.current()])) { step(room); return; }
       doCpu(room);
       step(room);
-    }, CPU_DELAY);
+    }, delay);
     return;
   }
   // human with no possible action -> auto pass to keep things moving
@@ -201,12 +298,25 @@ function handle(ws: WebSocket, msg: ClientMsg) {
     case "list": browsing.add(ws); return send(ws, { t: "rooms", rooms: roomBriefs() });
     case "create": return doCreate(ws, msg);
     case "join": return doJoin(ws, msg);
+    case "rejoin": return doRejoin(ws, msg);
     case "start": return doStart(ws);
     case "undo": return doUndo(ws);
     case "move":
     case "swap":
     case "pass": return doAction(ws, msg);
   }
+}
+
+// Clamp a client-supplied timer config to sane bounds (don't trust the wire).
+function sanitizeTimer(t: TimerConfig | undefined): TimerConfig {
+  if (!t || t.mode === "off") return DEFAULT_TIMER;
+  const clamp = (v: number | undefined, lo: number, hi: number, dflt: number) =>
+    Math.max(lo, Math.min(hi, Math.round(Number.isFinite(v as number) ? (v as number) : dflt)));
+  if (t.mode === "perMove") return { mode: "perMove", perMoveSec: clamp(t.perMoveSec, 5, 600, 30) };
+  if (t.mode === "chess") {
+    return { mode: "chess", totalSec: clamp(t.totalSec, 30, 3600, 300), incrementSec: clamp(t.incrementSec, 0, 60, 5) };
+  }
+  return DEFAULT_TIMER;
 }
 
 function doCreate(ws: WebSocket, msg: Extract<ClientMsg, { t: "create" }>) {
@@ -223,14 +333,17 @@ function doCreate(ws: WebSocket, msg: Extract<ClientMsg, { t: "create" }>) {
       connected: i === 0,
       aiLevel: msg.aiLevel ?? 1,
       isHost: i === 0,
+      token: i === 0 ? newToken() : "",
     });
   }
+  const timer = sanitizeTimer(msg.timer);
   const room: Room = { id, numPlayers: n, seats, seed: (Math.floor(Math.random() * 0x7fffffff) + 1),
-    boardRadius: msg.boardRadius | 0, started: false, game: null, history: [], lastPlaced: [], message: "", cpuTimer: null };
+    boardRadius: msg.boardRadius | 0, started: false, game: null, history: [], lastPlaced: [], message: "",
+    cpuTimer: null, reapTimer: null, timer, clock: null, flagTimer: null, timedOut: false };
   rooms.set(id, room);
   browsing.delete(ws);
   ctxOf.set(ws, { roomId: id, seat: 0 });
-  send(ws, { t: "joined", roomId: id, seat: 0 });
+  send(ws, { t: "joined", roomId: id, seat: 0, token: room.seats[0].token });
   broadcastLobby(room);
 }
 
@@ -242,10 +355,48 @@ function doJoin(ws: WebSocket, msg: Extract<ClientMsg, { t: "join" }>) {
   if (seatIdx < 0) return send(ws, { t: "error", message: "Room is full." });
   const seat = room.seats[seatIdx];
   seat.ws = ws; seat.connected = true; seat.name = msg.name || `Seat ${seatIdx + 1}`;
+  seat.token = newToken();
   browsing.delete(ws);
   ctxOf.set(ws, { roomId: room.id, seat: seatIdx });
-  send(ws, { t: "joined", roomId: room.id, seat: seatIdx });
+  send(ws, { t: "joined", roomId: room.id, seat: seatIdx, token: seat.token });
   broadcastLobby(room);
+}
+
+// Reclaim a seat after a disconnect by presenting the secret token issued at
+// join time. Works mid-game (the seat was kept as a dropped human, auto-piloted
+// in the meantime) and is the path the client uses to recover from any drop.
+function doRejoin(ws: WebSocket, msg: Extract<ClientMsg, { t: "rejoin" }>) {
+  const room = rooms.get(msg.roomId.toUpperCase());
+  if (!room) return send(ws, { t: "error", message: "That game is no longer available." });
+  const seatIdx = room.seats.findIndex((s) => s.type === "human" && s.token !== "" && s.token === msg.token);
+  if (seatIdx < 0) return send(ws, { t: "error", message: "Could not find your seat to reconnect." });
+  const seat = room.seats[seatIdx];
+  if (seat.ws && seat.ws !== ws) { try { seat.ws.close(); } catch { /* ignore */ } }
+  cancelReap(room);
+  room.clock?.resume(); // unfreeze clocks now someone is back
+  seat.ws = ws; seat.connected = true;
+  browsing.delete(ws);
+  ctxOf.set(ws, { roomId: room.id, seat: seatIdx });
+  send(ws, { t: "joined", roomId: room.id, seat: seatIdx, token: seat.token });
+  if (room.started && room.game) {
+    room.message = `${seat.name} reconnected.`;
+    step(room); // re-broadcast live state and recompute autopilot
+  } else {
+    broadcastLobby(room);
+  }
+}
+
+// Randomly permute the seats so a random player takes seat 0 (who moves first),
+// then remap each connected client's ws→seat so everyone still drives their own.
+function shuffleSeats(room: Room) {
+  for (let i = room.seats.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [room.seats[i], room.seats[j]] = [room.seats[j], room.seats[i]];
+  }
+  for (let i = 0; i < room.seats.length; i++) {
+    const ws = room.seats[i].ws;
+    if (ws) ctxOf.set(ws, { roomId: room.id, seat: i });
+  }
 }
 
 function doStart(ws: WebSocket) {
@@ -255,9 +406,14 @@ function doStart(ws: WebSocket) {
   if (room.started) return;
   if (!room.seats.every(seatFilled)) return send(ws, { t: "error", message: "Waiting for all seats to fill." });
 
+  // Seat 0 always plays first, so shuffle the seats to randomize who goes first.
+  shuffleSeats(room);
+
   room.game = new EngineModule.Game(room.numPlayers, room.seed, room.boardRadius);
   room.history = [];
   room.started = true;
+  room.timedOut = false;
+  room.clock = room.timer.mode !== "off" ? new Clock(room.timer, room.numPlayers) : null;
   room.message = "Game started — first round: play next to a printed symbol.";
   broadcastRooms(); // room is no longer open to join
   step(room);
@@ -329,23 +485,22 @@ function onClose(ws: WebSocket) {
   seat.ws = null; seat.connected = false;
 
   if (!room.started) {
-    // free the seat again for someone else
-    if (!seat.isHost) seat.name = `Seat ${ctx.seat + 1}`;
+    // free the seat again for someone else (and retire its rejoin token)
+    if (!seat.isHost) { seat.name = `Seat ${ctx.seat + 1}`; seat.token = ""; }
     // if nobody is connected, drop the room
     if (room.seats.every((s) => s.ws == null)) rooms.delete(room.id);
     broadcastLobby(room);
     broadcastRooms();
     return;
   }
-  // mid-game: let a CPU take over so play continues
-  seat.type = "cpu";
-  seat.name = `${seat.name} 🤖`;
+  // Mid-game: keep the seat as a (now disconnected) human so the player can
+  // reconnect with their token. step() auto-pilots their turns in the meantime.
   if (room.seats.every((s) => s.ws == null)) {
-    clearTimer(room);
-    try { room.game?.delete(); } catch { /* ignore */ }
-    rooms.delete(room.id);
+    // nobody left watching — hold the room briefly for reconnects, then reap it
+    scheduleReap(room);
     return;
   }
+  room.message = `${seat.name} disconnected — others continue.`;
   step(room);
 }
 
@@ -373,7 +528,10 @@ const http = createServer(async (req, res) => {
     res.writeHead(200, { "content-type": MIME[extname(filePath)] ?? "application/octet-stream" });
     res.end(data);
   } catch {
-    // SPA fallback
+    // SPA fallback for navigations only. A missing asset (.js/.css/.wasm/…) must
+    // 404 rather than return index.html — otherwise the browser rejects it for a
+    // "text/html" MIME type under strict module-script checking.
+    if (extname(urlPath)) { res.writeHead(404).end("Not found"); return; }
     try { res.writeHead(200, { "content-type": "text/html" }).end(await readFile(join(WEB_DIST, "index.html"))); }
     catch { res.writeHead(404).end("Not found"); }
   }

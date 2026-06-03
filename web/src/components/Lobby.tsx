@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import type { OnlineMatch } from "../match/OnlineMatch";
+import { timerLabel } from "./TimerSettings";
 
 export function Lobby({ match, onLeave }: { match: OnlineMatch; onLeave: () => void }) {
   useSyncExternalStore((cb) => match.onUpdate(cb), () => match.lobby());
@@ -28,7 +29,7 @@ export function Lobby({ match, onLeave }: { match: OnlineMatch; onLeave: () => v
   return (
     <div className="menu"><div className="menu-card lobby">
       <h1 className="logo small">Room {lobby.roomId}</h1>
-      <p className="tagline">Share the code · {filled}/{humanSeats.length} players joined</p>
+      <p className="tagline">Share the code · {filled}/{humanSeats.length} players joined · ⏱ {timerLabel(lobby.timer)}</p>
       <ul className="seatlist">
         {lobby.seats.map((s, i) => (
           <li key={i} className={i === seat ? "me" : ""}>
