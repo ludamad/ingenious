@@ -18,9 +18,9 @@ export function TimerSettings({ value, onChange }: { value: TimerConfig; onChang
     <div className="timer-settings">
       <label className="field"><span>Timer</span>
         <div className="seg">
-          <button className={mode === "off" ? "on" : ""} onClick={() => setMode("off")}>Off</button>
-          <button className={mode === "perMove" ? "on" : ""} onClick={() => setMode("perMove")}>Per move</button>
-          <button className={mode === "chess" ? "on" : ""} onClick={() => setMode("chess")}>Chess</button>
+          <button className={mode === "off" ? "on" : ""} aria-pressed={mode === "off"} onClick={() => setMode("off")}>Off</button>
+          <button className={mode === "perMove" ? "on" : ""} aria-pressed={mode === "perMove"} onClick={() => setMode("perMove")}>Per move</button>
+          <button className={mode === "chess" ? "on" : ""} aria-pressed={mode === "chess"} onClick={() => setMode("chess")}>Chess</button>
         </div>
       </label>
 
@@ -28,7 +28,7 @@ export function TimerSettings({ value, onChange }: { value: TimerConfig; onChang
         <label className="field"><span>Per turn</span>
           <div className="seg wrap">
             {PERMOVE_OPTS.map((s) => (
-              <button key={s} className={value.perMoveSec === s ? "on" : ""}
+              <button key={s} className={value.perMoveSec === s ? "on" : ""} aria-pressed={value.perMoveSec === s}
                 onClick={() => onChange({ mode: "perMove", perMoveSec: s })}>{s < 60 ? `${s}s` : `${s / 60}m`}</button>
             ))}
           </div>
@@ -40,7 +40,7 @@ export function TimerSettings({ value, onChange }: { value: TimerConfig; onChang
           <label className="field"><span>Total / player</span>
             <div className="seg wrap">
               {TOTAL_OPTS.map((m) => (
-                <button key={m} className={value.totalSec === m * 60 ? "on" : ""}
+                <button key={m} className={value.totalSec === m * 60 ? "on" : ""} aria-pressed={value.totalSec === m * 60}
                   onClick={() => onChange({ ...value, mode: "chess", totalSec: m * 60 })}>{m}m</button>
               ))}
             </div>
@@ -48,7 +48,7 @@ export function TimerSettings({ value, onChange }: { value: TimerConfig; onChang
           <label className="field"><span>Increment</span>
             <div className="seg wrap">
               {INC_OPTS.map((s) => (
-                <button key={s} className={(value.incrementSec ?? 0) === s ? "on" : ""}
+                <button key={s} className={(value.incrementSec ?? 0) === s ? "on" : ""} aria-pressed={(value.incrementSec ?? 0) === s}
                   onClick={() => onChange({ ...value, mode: "chess", incrementSec: s })}>+{s}s</button>
               ))}
             </div>

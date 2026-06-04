@@ -98,7 +98,7 @@ function Seg({ value, options, onChange }: { value: number; options: number[]; o
   return (
     <div className="seg">
       {options.map((n) => (
-        <button key={n} className={value === n ? "on" : ""} onClick={() => onChange(n)}>{n}</button>
+        <button key={n} className={value === n ? "on" : ""} aria-pressed={value === n} onClick={() => onChange(n)}>{n}</button>
       ))}
     </div>
   );
@@ -116,12 +116,12 @@ function VsCpu({ onStart, onBack }: { onStart: (p: PlayerInfo[], r: number, t: T
   }
   return (
     <div className="setup">
-      <button className="textlink back" onClick={onBack}>← back</button>
+      <button className="textlink back" onClick={onBack}>← Back</button>
       <label className="field"><span>Opponents</span><Seg value={opponents} options={[1, 2, 3]} onChange={setOpponents} /></label>
       <label className="field"><span>Difficulty</span>
         <div className="seg">
-          <button className={ai === 0 ? "on" : ""} onClick={() => setAi(0)}>Easy</button>
-          <button className={ai === 1 ? "on" : ""} onClick={() => setAi(1)}>Normal</button>
+          <button className={ai === 0 ? "on" : ""} aria-pressed={ai === 0} onClick={() => setAi(0)}>Easy</button>
+          <button className={ai === 1 ? "on" : ""} aria-pressed={ai === 1} onClick={() => setAi(1)}>Normal</button>
         </div>
       </label>
       <TimerSettings value={timer} onChange={setTimer} />
@@ -142,7 +142,7 @@ function PassPlay({ onStart, onBack }: { onStart: (p: PlayerInfo[], r: number, t
   }
   return (
     <div className="setup">
-      <button className="textlink back" onClick={onBack}>← back</button>
+      <button className="textlink back" onClick={onBack}>← Back</button>
       <p className="hint">Take turns on one device — each player's rack is shown only on their turn.</p>
       <label className="field"><span>Players</span><Seg value={count} options={[2, 3, 4]} onChange={setCount} /></label>
       <TimerSettings value={timer} onChange={setTimer} />

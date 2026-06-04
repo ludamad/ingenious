@@ -31,11 +31,14 @@ export function ClockBadge({ clock, seat, active }: { clock: ClockState; seat: n
 
   const ms = liveMs(clock, seat, now);
   const low = ms <= 10_000 && isRunning;
+  const flagged = clock.flagged[seat];
   const cls = "clock-badge"
     + (active ? " running" : "")
     + (low ? " low" : "")
-    + (clock.flagged[seat] ? " flagged" : "");
-  return <span className={cls} title={clock.flagged[seat] ? "Out of time" : "Time left"}>
-    {clock.flagged[seat] ? "⏱ 0:00" : `⏱ ${fmt(ms)}`}
+    + (flagged ? " flagged" : "");
+  // ⚠ adds a non-color low-time cue; aria-label gives the time to screen readers.
+  const label = flagged ? "Out of time" : `Time left ${fmt(ms)}${low ? ", running low" : ""}`;
+  return <span className={cls} role="timer" aria-label={label} title={label}>
+    {flagged ? "⏱ 0:00" : `${low ? "⚠ " : "⏱ "}${fmt(ms)}`}
   </span>;
 }

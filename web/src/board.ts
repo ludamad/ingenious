@@ -6,9 +6,6 @@ export const MIN_RADIUS = 3;
 export const MAX_RADIUS = 6;
 export const STANDARD_RADIUS = 5; // official 2-player area: side 6, 11 across
 
-export function defaultBoardRadius(): number {
-  return STANDARD_RADIUS;
-}
 
 // hexes across the 2-player play area for a given base radius
 export function cellsAcross(radius: number): number {

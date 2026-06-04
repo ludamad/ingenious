@@ -70,7 +70,7 @@ export function Lobby({ match, onLeave }: { match: OnlineMatch; onLeave: () => v
 
       {isHost ? (
         <button className="primary big start-btn" disabled={!allReady} onClick={() => match.start()}>
-          {allReady ? "▶  Start game" : `Waiting for players… (${filled}/${humanSeats.length})`}
+          {allReady ? "▶ Start game" : `Waiting for players… (${filled}/${humanSeats.length})`}
         </button>
       ) : (
         <p className="waiting-host"><span className="spinner" /> Waiting for the host to start…</p>
@@ -166,7 +166,7 @@ function HostSettings({ match, lobby }: { match: OnlineMatch; lobby: LobbyState 
         <span className="hs-label"><span className="hs-ic">👥</span> Players</span>
         <div className="seg pill-seg">
           {[2, 3, 4].map((n) => (
-            <button key={n} className={lobby.numPlayers === n ? "on" : ""}
+            <button key={n} className={lobby.numPlayers === n ? "on" : ""} aria-pressed={lobby.numPlayers === n}
               onClick={() => match.configure({ numPlayers: n })}>{n}</button>
           ))}
         </div>

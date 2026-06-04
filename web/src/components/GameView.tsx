@@ -282,12 +282,22 @@ function GameOver({ snap, onLeave }: { snap: ReturnType<Match["snapshot"]>; onLe
         ? `${snap.players[winner]?.name ?? "Winner"} wins! 🎉`
         : "Game over";
 
+  // Focus the dialog on mount and allow Escape to dismiss (a11y).
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    dialogRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onLeave(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onLeave]);
+
   return (
     <div className="overlay">
       {celebrate && <Confetti />}
-      <div className={"modal win-modal" + (celebrate ? " celebrate" : "")}>
+      <div className={"modal win-modal" + (celebrate ? " celebrate" : "")}
+        role="dialog" aria-modal="true" aria-labelledby="win-title" tabIndex={-1} ref={dialogRef}>
         <div className="win-trophy" aria-hidden="true">🏆</div>
-        <h2 className="win-title">{headline}</h2>
+        <h2 className="win-title" id="win-title">{headline}</h2>
         {!solo && (
           <p className="win-sub">
             {youWon ? "Lowest counter takes it — nicely balanced."

@@ -79,12 +79,25 @@ function shuffle<T>(arr: T[]): T[] {
 function OnlineScreen({ match, onLeave }: { match: OnlineMatch; onLeave: () => void }) {
   useSyncExternalStore((cb) => match.onUpdate(cb), () => match.version());
   const phase = match.phase();
-  // Resuming a game after a reload: hold a splash instead of flashing the
-  // browser before the rejoined snapshot arrives.
-  if (phase === "browse" && match.resuming()) {
-    return <div className="menu"><div className="menu-card"><p>Reconnecting…</p></div></div>;
-  }
+  const link = match.linkState();
+
   if (phase === "game") return <GameView match={match} onLeave={onLeave} />;
   if (phase === "lobby") return <Lobby match={match} onLeave={onLeave} />;
+
+  // Browse phase: distinguish "can't reach the server" from a normal browse so
+  // an offline user isn't stranded on a dead Create/Join screen.
+  if (link === "closed") {
+    return (
+      <div className="menu"><div className="menu-card">
+        <h2>Can't reach the server</h2>
+        <p className="hint">{match.error() || "Online play needs the game server, which isn't reachable right now."}</p>
+        <button className="primary" onClick={onLeave}>Back to menu</button>
+      </div></div>
+    );
+  }
+  // Still connecting / resuming a reloaded game: hold a splash.
+  if (match.resuming() || (!match.listReady() && link !== "online")) {
+    return <div className="menu"><div className="menu-card"><p className="finding"><span className="spinner" /> Connecting…</p></div></div>;
+  }
   return <Browse match={match} onLeave={onLeave} />;
 }

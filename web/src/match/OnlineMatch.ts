@@ -42,6 +42,7 @@ export class OnlineMatch extends Emitter implements Match {
   private err = "";
   private ver = 0;
   private link: Link = "connecting";
+  private gotRooms = false; // received at least one open-games list
   private disposed = false;
   private retry = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
@@ -68,6 +69,10 @@ export class OnlineMatch extends Emitter implements Match {
   version() { return this.ver; }       // changes whenever anything updates (for stores)
   rooms() { return this.roomList; }
   error() { return this.err; }
+  // connectivity for the UI: "connecting" | "online" | "reconnecting" | "closed"
+  linkState(): Link { return this.link; }
+  // true once we've received the open-games list (vs. still connecting)
+  listReady(): boolean { return this.gotRooms; }
   refresh() { this.send({ t: "list" }); }
 
   // --- browse actions ---
@@ -88,7 +93,6 @@ export class OnlineMatch extends Emitter implements Match {
   // --- lobby accessors/actions ---
   lobby(): LobbyState | null { return this.lobbyState; }
   mySeatIndex(): number | null { return this.seat; }
-  roomCode(): string { return this.roomId; }
   // mid-rejoin with nothing to show yet (e.g. resuming after a page reload)
   resuming(): boolean { return this.awaitingRejoin && !this.snap && !this.lobbyState; }
   start() { this.send({ t: "start" }); }
@@ -107,7 +111,6 @@ export class OnlineMatch extends Emitter implements Match {
   configure(cfg: { numPlayers?: number; boardRadius?: number; timer?: TimerConfig; fillCpu?: boolean }) {
     this.send({ t: "config", ...cfg });
   }
-  inGame(): boolean { return this.snap != null; }
 
   // --- chat ---
   chat(): ChatMsg[] { return this.chatLog; }
@@ -230,7 +233,7 @@ export class OnlineMatch extends Emitter implements Match {
         saveSession({ roomId: msg.roomId, token: msg.token });
         break;
       case "lobby": this.lobbyState = msg.lobby; this.awaitingRejoin = false; break;
-      case "rooms": this.roomList = msg.rooms; break;
+      case "rooms": this.roomList = msg.rooms; this.gotRooms = true; break;
       case "chatHistory":
         // Replace the local log with the server backlog (de-duped on (re)join).
         this.chatLog = msg.msgs.slice(-CHAT_CAP);
