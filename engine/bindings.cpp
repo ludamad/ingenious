@@ -100,6 +100,18 @@ public:
         return moveToVal(m);
     }
 
+    // Per-cell best-points preview for a rack tile (both faces, all dirs).
+    val tileHeatmap(int tileIndex) const {
+        val arr = val::array();
+        int i = 0;
+        for (auto& h : g_.tileHeatmap(tileIndex)) {
+            val o = val::object();
+            o.set("q", h.q); o.set("r", h.r); o.set("points", h.points);
+            arr.set(i++, o);
+        }
+        return arr;
+    }
+
     bool canSwap() const { return g_.canSwap(); }
     bool swap() { return g_.swap(); }
     bool pass() { return g_.pass(); }
@@ -128,6 +140,7 @@ EMSCRIPTEN_BINDINGS(ingenious) {
         .function("legalMoves",  &IngGame::legalMoves)
         .function("applyMove",   &IngGame::applyMove)
         .function("aiMove",      &IngGame::aiMove)
+        .function("tileHeatmap", &IngGame::tileHeatmap)
         .function("canSwap",     &IngGame::canSwap)
         .function("swap",        &IngGame::swap)
         .function("pass",        &IngGame::pass)

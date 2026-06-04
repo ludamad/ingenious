@@ -19,6 +19,7 @@ export interface Game {
   legalMoves(): Move[];
   applyMove(t: number, q: number, r: number, dir: number, flip: number): ApplyResult;
   aiMove(level: number): Move;
+  tileHeatmap(tileIndex: number): { q: number; r: number; points: number }[];
   canSwap(): boolean; swap(): boolean; pass(): boolean;
   hasAnyMove(): boolean; finished(): boolean; current(): number;
   playerScore(p: number): number; ranking(): number[]; delete(): void;

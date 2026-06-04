@@ -152,6 +152,58 @@ public:
         return out;
     }
 
+    // --- placement heatmap ---
+    // For one rack tile, the best total points obtainable at each playable cell,
+    // considering EVERY legal placement that covers that cell — both faces and
+    // all six orientations. A cell's value is the max over all such placements.
+    //
+    // Robust by construction: it scores each candidate exactly the way applyMove
+    // does (scoreFrom on both halves against the live board), so the preview can
+    // never disagree with what a move would actually award. Returns (q, r, pts).
+    struct HeatCell { int q, r, points; };
+    std::vector<HeatCell> tileHeatmap(int tileIndex) const {
+        std::vector<HeatCell> out;
+        if (finished_) return out;
+        const auto& h = hands_[current_];
+        if (tileIndex < 0 || tileIndex >= (int)h.size()) return out;
+        const int a = h[tileIndex][0], b = h[tileIndex][1];
+        const bool sameColor = (a == b);
+
+        // best[encode(q,r)] = best points seen for a placement covering (q,r);
+        // -1 = untouched, so we only emit cells an actual legal move can reach.
+        std::vector<int> best(NCELL, -1);
+
+        for (int q = -fullRadius_; q <= fullRadius_; ++q)
+            for (int r = -fullRadius_; r <= fullRadius_; ++r) {
+                if (cellAt(q, r) != EMPTY) continue;
+                for (int d = 0; d < 6; ++d) {
+                    int nq = q + DIRS[d][0], nr = r + DIRS[d][1];
+                    if (cellAt(nq, nr) != EMPTY) continue;
+                    int flips = sameColor ? 1 : 2;
+                    for (int f = 0; f < flips; ++f) {
+                        Move m{tileIndex, q, r, d, f};
+                        if (!firstMoveOk(m)) continue;            // honor first-round rule
+                        int ca = f ? b : a;                       // color at anchor
+                        int cb = f ? a : b;                       // color at partner
+                        // Score both halves against the current board, exactly as
+                        // applyMove. Halves exclude the direction pointing at each
+                        // other, so scoring pre-placement equals the post result.
+                        int pts = scoreFrom(q, r, ca, d) + scoreFrom(nq, nr, cb, opposite(d));
+                        int ea = encode(q, r), eb = encode(nq, nr);
+                        if (pts > best[ea]) best[ea] = pts;
+                        if (pts > best[eb]) best[eb] = pts;
+                    }
+                }
+            }
+
+        for (int q = -fullRadius_; q <= fullRadius_; ++q)
+            for (int r = -fullRadius_; r <= fullRadius_; ++r) {
+                int e = encode(q, r);
+                if (best[e] >= 0) out.push_back({q, r, best[e]});
+            }
+        return out;
+    }
+
     bool isLegal(const Move& m) const {
         if (finished_) return false;
         const auto& h = hands_[current_];

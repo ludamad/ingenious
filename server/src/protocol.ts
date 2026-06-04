@@ -7,15 +7,19 @@ export interface TimerConfig { mode: TimerMode; perMoveSec?: number; totalSec?: 
 export interface ClockState { mode: TimerMode; remainingMs: number[]; running: number | null; flagged: boolean[]; asOf: number; }
 
 export interface LobbySeat { type: "human" | "cpu"; name: string; filled: boolean; isHost: boolean; }
-export interface LobbyState { roomId: string; numPlayers: number; seats: LobbySeat[]; started: boolean; timer: TimerConfig; }
+export interface LobbyState { roomId: string; numPlayers: number; seats: LobbySeat[]; started: boolean; timer: TimerConfig; boardRadius: number; fillCpu: boolean; }
 export interface RoomBrief { roomId: string; host: string; humanFilled: number; humanTotal: number; numPlayers: number; boardRadius: number; }
 export interface ChatMsg { seat: number; name: string; text: string; ts: number; system?: boolean; }
+export interface HeatCell { q: number; r: number; points: number; }
 
 export type ClientMsg =
   | { t: "list" }
   | { t: "create"; numPlayers: number; cpuSeats: number[]; aiLevel: number; boardRadius: number; name: string; timer?: TimerConfig }
   | { t: "join"; roomId: string; name: string }
+  | { t: "quickplay"; name: string }
   | { t: "rejoin"; roomId: string; token: string }
+  | { t: "rename"; name: string }
+  | { t: "config"; numPlayers?: number; boardRadius?: number; timer?: TimerConfig; fillCpu?: boolean }
   | { t: "start" }
   | { t: "move"; tileIndex: number; q: number; r: number; dir: number; flip: number }
   | { t: "swap" }
@@ -29,7 +33,7 @@ export type ServerMsg =
   | { t: "snapshot"; state: any; handCounts: number[]; players: PlayerInfo[];
       current: number; canSwap: boolean; canUndo: boolean; pendingBonus: number; legalMoves: Move[];
       lastPlaced: { q: number; r: number }[]; message: string;
-      gameOver: boolean; ranking: number[]; clock?: ClockState }
+      gameOver: boolean; ranking: number[]; clock?: ClockState; heatmaps?: HeatCell[][] }
   | { t: "rooms"; rooms: RoomBrief[] }
   | { t: "chat"; msg: ChatMsg }
   | { t: "chatHistory"; msgs: ChatMsg[] }

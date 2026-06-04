@@ -78,6 +78,11 @@ export class OnlineMatch extends Emitter implements Match {
     this.err = "";
     this.send({ t: "join", roomId, name });
   }
+  // Join the next open lobby (server creates one if none) — the default landing.
+  quickplay(name: string) {
+    this.err = "";
+    this.send({ t: "quickplay", name });
+  }
 
   // --- lobby accessors/actions ---
   lobby(): LobbyState | null { return this.lobbyState; }
@@ -86,6 +91,10 @@ export class OnlineMatch extends Emitter implements Match {
   // mid-rejoin with nothing to show yet (e.g. resuming after a page reload)
   resuming(): boolean { return this.awaitingRejoin && !this.snap && !this.lobbyState; }
   start() { this.send({ t: "start" }); }
+  rename(name: string) { this.send({ t: "rename", name }); }
+  configure(cfg: { numPlayers?: number; boardRadius?: number; timer?: TimerConfig; fillCpu?: boolean }) {
+    this.send({ t: "config", ...cfg });
+  }
   inGame(): boolean { return this.snap != null; }
 
   // --- chat ---
@@ -248,6 +257,7 @@ export class OnlineMatch extends Emitter implements Match {
           ranking: msg.ranking,
           reconnecting: this.link !== "online",
           clock: msg.clock,
+          heatmaps: yourTurn ? msg.heatmaps : undefined,
         };
         break;
       }

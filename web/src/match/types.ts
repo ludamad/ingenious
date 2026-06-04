@@ -1,5 +1,5 @@
-import type { GameState, Move } from "../engine/engine";
-export type { Move };
+import type { GameState, Move, HeatCell } from "../engine/engine";
+export type { Move, HeatCell };
 
 export type SeatType = "human" | "cpu";
 
@@ -51,6 +51,10 @@ export interface Snapshot {
   ranking: number[];
   reconnecting?: boolean; // online only: socket is down and trying to recover
   clock?: ClockState;     // present when a timer is active
+  // Per rack-tile placement heatmaps for the acting seat, precomputed by the
+  // engine once per position (indexed by hand tile index). The UI just looks up
+  // cells on hover/select — no recompute. Absent when it isn't your turn.
+  heatmaps?: HeatCell[][];
 }
 
 export interface Match {

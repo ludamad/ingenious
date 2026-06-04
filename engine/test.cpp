@@ -2,6 +2,7 @@
 #include "ingenious.hpp"
 #include <cstdio>
 #include <cassert>
+#include <map>
 using namespace ing;
 
 static int failures = 0;
@@ -111,6 +112,43 @@ int main() {
         }
         CHECK(guard < 5000, "solitaire terminates");
         printf("solitaire final lowest = %d\n", g.playerScore(0));
+    }
+
+    // --- tileHeatmap matches actual applyMove deltas, both faces, all cells ---
+    {
+        for (int seed = 1; seed <= 25; ++seed) {
+            Game g(2 + (seed % 3), seed);            // 2..4 players
+            int plies = 8 + (seed % 12);
+            for (int i = 0; i < plies && !g.finished(); ++i) {
+                if (!g.hasAnyMove()) break;
+                g.applyMove(g.aiMove(i % 2));
+            }
+            if (g.finished()) continue;
+            int seat = g.current();
+            int rack = (int)g.hand(seat).size();
+            for (int t = 0; t < rack; ++t) {
+                auto heat = g.tileHeatmap(t);
+                // Ground truth: best real delta-sum per covered cell, by actually
+                // applying every legal placement of this tile on a value copy.
+                std::map<int,int> truth;
+                for (auto& m : g.legalMoves()) {
+                    if (m.tileIndex != t) continue;
+                    Game gc = g;
+                    auto res = gc.applyMove(m);
+                    int s = 0; for (auto& d : res.deltas) s += d.points;
+                    int nq = m.q + DIRS[m.dir][0], nr = m.r + DIRS[m.dir][1];
+                    auto upd = [&](int e){ auto it = truth.find(e); if (it==truth.end()||s>it->second) truth[e]=s; };
+                    upd(encode(m.q, m.r)); upd(encode(nq, nr));
+                }
+                std::map<int,int> hm;
+                for (auto& hc : heat) hm[encode(hc.q, hc.r)] = hc.points;
+                CHECK(hm.size() == truth.size(), "heatmap cell count matches reachable cells");
+                bool ok = true;
+                for (auto& kv : truth) if (hm.count(kv.first)==0 || hm[kv.first] != kv.second) ok = false;
+                CHECK(ok, "heatmap value equals best real placement score for every cell");
+            }
+        }
+        printf("tileHeatmap verified against applyMove deltas\n");
     }
 
     if (failures == 0) printf("ALL TESTS PASSED\n");

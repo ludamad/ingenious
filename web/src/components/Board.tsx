@@ -1,8 +1,8 @@
 import { useMemo } from "react";
 import { axialToPixel, hexPoints, DIRS, PALETTE, HEX_SIZE } from "../hex";
 import { Symbol } from "./Symbol";
-import { heatmapFor, heatColor } from "../engine/score";
-import type { GameState, Move, Tile } from "../engine/engine";
+import { heatMap, heatColor } from "../engine/score";
+import type { GameState, Move, Tile, HeatCell } from "../engine/engine";
 
 const key = (q: number, r: number) => `${q},${r}`;
 
@@ -13,7 +13,9 @@ interface Props {
   selectedTile: Tile | null;
   // a tile being previewed by hover (no selection needed) — drives the heatmap
   hoverTileIndex?: number | null;
-  hoverTile?: Tile | null;
+  // per rack-tile placement heatmaps, precomputed by the engine (indexed by
+  // hand tile index). Hover/select just looks up the right one — no recompute.
+  heatmaps?: HeatCell[][];
   flip: number;
   anchor: { q: number; r: number } | null;
   interactive: boolean;
@@ -26,13 +28,12 @@ interface Props {
 }
 
 export function Board(props: Props) {
-  const { state, legalMoves, selectedTileIndex, selectedTile, hoverTileIndex, hoverTile, flip, anchor, interactive, lastPlaced, previewMove } = props;
+  const { state, legalMoves, selectedTileIndex, selectedTile, hoverTileIndex, heatmaps, flip, anchor, interactive, lastPlaced, previewMove } = props;
 
   // The tile the heatmap should reflect: the selected one, or — when nothing is
   // selected — whatever the player is hovering in the rack. Hover lets you
   // compare spots for every tile without committing to a selection.
   const heatTileIndex = selectedTileIndex ?? hoverTileIndex ?? null;
-  const heatTile = selectedTile ?? hoverTile ?? null;
 
   const candidates = useMemo(
     () => legalMoves.filter((m) => m.tileIndex === selectedTileIndex && m.flip === flip),
@@ -74,13 +75,13 @@ export function Board(props: Props) {
   const partnerKey = lastPlaced.length > 1 ? key(lastPlaced[1].q, lastPlaced[1].r) : "";
   const lastSet = useMemo(() => new Set(lastPlaced.map((p) => key(p.q, p.r))), [lastPlaced]);
 
-  // Heatmap: for the selected (or hovered) tile, the best score reachable at
-  // each cell, across both orientations. Computed once per (tile, board,
-  // legalMoves) — the lazy per-move calc the shading needs — and reused below.
+  // Heatmap: look up the precomputed per-cell scores for the selected/hovered
+  // tile (values come from the engine; this only indexes them into a Map). Only
+  // re-indexes when the chosen tile or the heatmap data changes — no scoring.
   const heat = useMemo(() => {
-    if (heatTileIndex == null || !heatTile) return null;
-    return heatmapFor(state, heatTile, heatTileIndex, legalMoves);
-  }, [state, heatTile, heatTileIndex, legalMoves]);
+    if (heatTileIndex == null || !heatmaps) return null;
+    return heatMap(heatmaps[heatTileIndex]);
+  }, [heatmaps, heatTileIndex]);
 
   const firstColor = selectedTile ? (flip ? selectedTile.b : selectedTile.a) : -1;
   const secondColor = selectedTile ? (flip ? selectedTile.a : selectedTile.b) : -1;

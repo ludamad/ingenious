@@ -1,6 +1,6 @@
 // Wire protocol shared (by convention) with the server. Keep in sync with
 // server/src/protocol.ts.
-import type { GameState, Move } from "../engine/engine";
+import type { GameState, Move, HeatCell } from "../engine/engine";
 import type { PlayerInfo, ClockState, TimerConfig } from "./types";
 
 export interface LobbySeat { type: "human" | "cpu"; name: string; filled: boolean; isHost: boolean; }
@@ -10,6 +10,8 @@ export interface LobbyState {
   seats: LobbySeat[];
   started: boolean;
   timer: TimerConfig;
+  boardRadius: number;   // 0 = classic for the player count
+  fillCpu: boolean;      // host setting: fill empty seats with CPU on start
 }
 
 // a joinable game shown in the lobby browser
@@ -39,7 +41,7 @@ export type ServerMsg =
   | { t: "snapshot"; state: GameState; handCounts: number[]; players: PlayerInfo[];
       current: number; canSwap: boolean; canUndo: boolean; pendingBonus: number; legalMoves: Move[];
       lastPlaced: { q: number; r: number }[]; message: string;
-      gameOver: boolean; ranking: number[]; clock?: ClockState }
+      gameOver: boolean; ranking: number[]; clock?: ClockState; heatmaps?: HeatCell[][] }
   | { t: "rooms"; rooms: RoomBrief[] }
   | { t: "chat"; msg: ChatMsg }                 // one new line
   | { t: "chatHistory"; msgs: ChatMsg[] }       // recent backlog on (re)join
@@ -50,7 +52,10 @@ export type ClientMsg =
   | { t: "list" }
   | { t: "create"; numPlayers: number; cpuSeats: number[]; aiLevel: number; boardRadius: number; name: string; timer?: TimerConfig }
   | { t: "join"; roomId: string; name: string }
+  | { t: "quickplay"; name: string }   // join the next open lobby, or create one
   | { t: "rejoin"; roomId: string; token: string }
+  | { t: "rename"; name: string }      // change your display name in the lobby
+  | { t: "config"; numPlayers?: number; boardRadius?: number; timer?: TimerConfig; fillCpu?: boolean } // host edits lobby settings
   | { t: "start" }
   | { t: "move"; tileIndex: number; q: number; r: number; dir: number; flip: number }
   | { t: "swap" }

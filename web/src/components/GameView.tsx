@@ -85,9 +85,6 @@ export function GameView({ match, onLeave }: { match: Match; onLeave: () => void
   const selectedFlips = selected != null ? flipsByTile.get(selected) : undefined;
   const canFlip = (selectedFlips?.size ?? 0) > 1;
 
-  // Hovered tile (only meaningful on your turn, when there are legal moves to
-  // score). Ignored while a tile is selected — the selection drives the heatmap.
-  const hoverTile = canSelect && hoverTileIndex != null && hand[hoverTileIndex] ? hand[hoverTileIndex] : null;
 
   // sound effects, by diffing successive snapshots (local / CPU / online alike)
   const prev = useRef<{ lp: string; total: number; maxed: number; over: boolean; yours: boolean } | null>(null);
@@ -218,8 +215,8 @@ export function GameView({ match, onLeave }: { match: Match; onLeave: () => void
             legalMoves={legal}
             selectedTileIndex={selected}
             selectedTile={selectedTile}
-            hoverTileIndex={hoverTileIndex}
-            hoverTile={hoverTile}
+            hoverTileIndex={canSelect ? hoverTileIndex : null}
+            heatmaps={snap.heatmaps}
             flip={flip}
             anchor={anchor}
             interactive={canSelect}

@@ -112,6 +112,13 @@ input { font: inherit; }
 }
 .seg { display: inline-flex; gap: 6px; }
 .seg.small button { padding: 6px 10px; font-size: 13px; }
+.field.col input { width: 100%; min-width: 0; }
+
+/* host's in-lobby game settings */
+.host-settings { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 12px;
+  padding: 12px 14px; border: 1px solid var(--panel-edge); border-radius: 14px;
+  background: rgba(255,255,255,0.45); }
+.host-settings h3 { margin: 0 0 2px; font-family: var(--font-display); font-weight: 600; }
 .seats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 .seat { display: flex; align-items: center; justify-content: space-between; gap: 10px;
   background: rgba(255,255,255,0.55); border: 1px solid var(--panel-edge); border-radius: 12px; padding: 8px 12px; }

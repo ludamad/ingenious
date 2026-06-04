@@ -11,6 +11,7 @@ export interface Cell { q: number; r: number; color: number; } // color: -1 empt
 export interface Tile { a: number; b: number; }
 export interface Move { tileIndex: number; q: number; r: number; dir: number; flip: number; }
 export interface ScoreDelta { color: number; points: number; }
+export interface HeatCell { q: number; r: number; points: number; }
 
 export interface GameState {
   numPlayers: number;
@@ -42,6 +43,7 @@ export interface Game {
   legalMoves(): Move[];
   applyMove(tileIndex: number, q: number, r: number, dir: number, flip: number): ApplyResult;
   aiMove(level: number): Move;
+  tileHeatmap(tileIndex: number): HeatCell[];
   canSwap(): boolean;
   swap(): boolean;
   pass(): boolean;

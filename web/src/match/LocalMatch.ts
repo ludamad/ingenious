@@ -33,6 +33,10 @@ export class LocalMatch extends Emitter implements Match {
   private timer: number | null = null;
   private disposed = false;
   private snap!: Snapshot;
+  // Heatmaps for the acting seat, computed once per position and reused across
+  // re-renders (incl. the 250ms clock tick) until the position changes.
+  private heatmaps: import("./types").HeatCell[][] | undefined;
+  private heatKey = "";
   private clock: Clock;
   private clockTick: number | null = null;
   private timedOut = false; // a seat flagged -> game ends, flagged seats lose
@@ -151,6 +155,18 @@ export class LocalMatch extends Emitter implements Match {
     return this.history.some((a) => this.players[a.seat]?.type === "human");
   }
 
+  // Per-tile heatmaps for the acting seat, memoized per position so they're
+  // computed once and reused on every re-render/hover (and across clock ticks).
+  private computeHeatmaps(cur: number, handLen: number): import("./types").HeatCell[][] {
+    const key = `${cur}:${handLen}:${this.history.length}`;
+    if (this.heatmaps && this.heatKey === key) return this.heatmaps;
+    const maps: import("./types").HeatCell[][] = [];
+    for (let i = 0; i < handLen; i++) maps.push(this.g.tileHeatmap(i));
+    this.heatmaps = maps;
+    this.heatKey = key;
+    return maps;
+  }
+
   private rebuild() {
     const state = this.g.state();
     const cur = state.current;
@@ -163,6 +179,7 @@ export class LocalMatch extends Emitter implements Match {
       mySeat: curHuman ? cur : null,
       yourTurn: curHuman,
       legalMoves: curHuman ? this.g.legalMoves() : [],
+      heatmaps: curHuman ? this.computeHeatmaps(cur, state.hands[cur].length) : undefined,
       canSwap: !this.timedOut && this.g.canSwap(),
       canUndo: !this.timedOut && this.canUndo(),
       pendingBonus: state.pendingBonus,

@@ -14,11 +14,26 @@ type Screen =
   | { k: "online"; match: OnlineMatch }
   | { k: "game"; match: Match };
 
+// Remember the player's chosen name across sessions (used for quick play).
+const NAME_KEY = "ingenious.name";
+export function loadName(): string {
+  try { return localStorage.getItem(NAME_KEY) || "Player"; } catch { return "Player"; }
+}
+export function saveName(n: string) { try { localStorage.setItem(NAME_KEY, n); } catch { /* ignore */ } }
+
+// Open an online match. Resumes an in-progress game from a saved session;
+// otherwise jumps straight into the next available lobby (quick play default).
+function openOnline(): OnlineMatch {
+  const m = new OnlineMatch();
+  if (!OnlineMatch.hasSession()) m.quickplay(loadName());
+  return m;
+}
+
 export function App() {
-  // If a previous tab left an online game mid-play, drop straight back into it
-  // and let OnlineMatch reclaim the seat (falling back to browsing if it's gone).
-  const [screen, setScreen] = useState<Screen>(() =>
-    OnlineMatch.hasSession() ? { k: "online", match: new OnlineMatch() } : { k: "menu" });
+  // Default landing: drop straight into online play — resume a game in progress,
+  // else quick-join the next open lobby (creating one if none). Single-player is
+  // reachable from there via the menu.
+  const [screen, setScreen] = useState<Screen>(() => ({ k: "online", match: openOnline() }));
 
   function leave() {
     if (screen.k === "game" || screen.k === "online") screen.match.dispose();
@@ -35,7 +50,7 @@ export function App() {
   }
 
   function playOnline() {
-    setScreen({ k: "online", match: new OnlineMatch() });
+    setScreen({ k: "online", match: openOnline() });
   }
 
   switch (screen.k) {

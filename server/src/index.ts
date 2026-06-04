@@ -71,6 +71,7 @@ interface Room {
   flagTimer: NodeJS.Timeout | null; // fires when the running seat would flag
   timedOut: boolean;                // a seat ran out -> game over, flagged lose
   chat: ChatMsg[];                  // recent chat history (capped)
+  fillCpu: boolean;                 // host setting: fill open seats with CPU on start
 }
 interface Ctx { roomId: string; seat: number; }
 
@@ -113,6 +114,8 @@ function lobbyState(room: Room): LobbyState {
     started: room.started,
     seats: room.seats.map((s) => ({ type: s.type, name: s.name, filled: seatFilled(s), isHost: s.isHost })),
     timer: room.timer,
+    boardRadius: room.boardRadius,
+    fillCpu: room.fillCpu,
   };
 }
 function broadcastLobby(room: Room) {
@@ -179,6 +182,13 @@ function broadcast(room: Room) {
   // a human may undo their own last action, but only while no one has acted since
   const lastSeat = room.history.length ? room.history[room.history.length - 1].seat : -1;
 
+  // Placement heatmaps for the seat to move: computed once per position by the
+  // engine and sent only to that seat (it only reveals where THEIR own tiles
+  // score, so it leaks nothing). Done once here, not per recipient.
+  const heatmaps = !finished && room.seats[current]?.type === "human"
+    ? state.hands[current].map((_: any, i: number) => g.tileHeatmap(i))
+    : undefined;
+
   for (let seat = 0; seat < room.seats.length; seat++) {
     const ws = room.seats[seat].ws;
     if (!ws) continue;
@@ -201,6 +211,7 @@ function broadcast(room: Room) {
       gameOver: finished,
       ranking,
       clock,
+      heatmaps: seat === current ? heatmaps : undefined,
     };
     send(ws, msg);
   }
@@ -330,7 +341,10 @@ function handle(ws: WebSocket, msg: ClientMsg) {
     case "list": browsing.add(ws); return send(ws, { t: "rooms", rooms: roomBriefs() });
     case "create": return doCreate(ws, msg);
     case "join": return doJoin(ws, msg);
+    case "quickplay": return doQuickplay(ws, msg);
     case "rejoin": return doRejoin(ws, msg);
+    case "rename": return doRename(ws, msg);
+    case "config": return doConfig(ws, msg);
     case "start": return doStart(ws);
     case "undo": return doUndo(ws);
     case "chat": return doChat(ws, msg);
@@ -338,6 +352,41 @@ function handle(ws: WebSocket, msg: ClientMsg) {
     case "swap":
     case "pass": return doAction(ws, msg);
   }
+}
+
+// Change your display name (lobby or in-game). Broadcasts the update.
+function doRename(ws: WebSocket, msg: Extract<ClientMsg, { t: "rename" }>) {
+  const ctx = ctxOf.get(ws); if (!ctx) return;
+  const room = rooms.get(ctx.roomId); if (!room) return;
+  const seat = room.seats[ctx.seat];
+  if (!seat || seat.ws !== ws || seat.type !== "human") return;
+  const next = cleanName(msg.name, seat.name);
+  if (next === seat.name) return;
+  const old = seat.name;
+  seat.name = next;
+  systemChat(room, `${old} is now ${next}.`);
+  if (room.started && room.game) broadcast(room); else broadcastLobby(room);
+}
+
+// Host edits lobby settings before the game starts: player count, board size,
+// timer, and whether empty seats are filled with CPU. Re-lays the seats.
+function doConfig(ws: WebSocket, msg: Extract<ClientMsg, { t: "config" }>) {
+  const ctx = ctxOf.get(ws); if (!ctx) return;
+  const room = rooms.get(ctx.roomId); if (!room) return;
+  if (room.started) return send(ws, { t: "error", message: "Can't change settings after the game starts." });
+  if (!room.seats[ctx.seat]?.isHost) return send(ws, { t: "error", message: "Only the host can change settings." });
+
+  if (typeof msg.numPlayers === "number") {
+    const n = Math.max(2, Math.min(4, msg.numPlayers | 0));
+    // don't drop already-connected humans
+    const humans = room.seats.filter((s) => s.type === "human" && s.ws != null).length;
+    room.numPlayers = Math.max(n, humans);
+  }
+  if (typeof msg.boardRadius === "number") room.boardRadius = Math.max(0, Math.min(7, msg.boardRadius | 0));
+  if (msg.timer !== undefined) room.timer = sanitizeTimer(msg.timer);
+  if (typeof msg.fillCpu === "boolean") room.fillCpu = msg.fillCpu;
+  layoutSeats(room);
+  broadcastLobby(room);
 }
 
 function doChat(ws: WebSocket, msg: Extract<ClientMsg, { t: "chat" }>) {
@@ -367,6 +416,32 @@ function sanitizeTimer(t: TimerConfig | undefined): TimerConfig {
 // leak its old room. onClose is hoisted (function declaration).
 function vacate(ws: WebSocket) { onClose(ws); }
 
+// (Re)lay out a room's seats for its current numPlayers + fillCpu, preserving
+// connected human players (and the host) by packing them into the low seats.
+// Used at create time and whenever the host reconfigures the lobby.
+function layoutSeats(room: Room, aiLevel = 1) {
+  const humans = room.seats.filter((s) => s.type === "human" && s.ws != null);
+  const n = room.numPlayers;
+  let cpu = 0;
+  const seats: Seat[] = [];
+  for (let i = 0; i < n; i++) {
+    const human = humans[i];
+    if (human) {
+      seats.push(human);
+    } else if (room.fillCpu) {
+      seats.push({ type: "cpu", name: `CPU ${++cpu}`, ws: null, connected: true, aiLevel, isHost: false, token: "" });
+    } else {
+      seats.push({ type: "human", name: `Seat ${i + 1}`, ws: null, connected: false, aiLevel, isHost: false, token: "" });
+    }
+  }
+  // Ensure exactly one host among connected humans (first one).
+  let hosted = false;
+  for (const s of seats) { if (s.type === "human" && s.ws != null && !hosted) { s.isHost = true; hosted = true; } else { s.isHost = false; } }
+  room.seats = seats;
+  // Remap each connected human's ws -> its new seat index.
+  for (let i = 0; i < seats.length; i++) { const w = seats[i].ws; if (w) ctxOf.set(w, { roomId: room.id, seat: i }); }
+}
+
 function doCreate(ws: WebSocket, msg: Extract<ClientMsg, { t: "create" }>) {
   if (rooms.size >= MAX_ROOMS) return send(ws, { t: "error", message: "Server is busy — try again shortly." });
   // Leave any room this socket already occupies, so repeated creates can't leak
@@ -392,12 +467,26 @@ function doCreate(ws: WebSocket, msg: Extract<ClientMsg, { t: "create" }>) {
   const timer = sanitizeTimer(msg.timer);
   const room: Room = { id, numPlayers: n, seats, seed: (Math.floor(Math.random() * 0x7fffffff) + 1),
     boardRadius: msg.boardRadius | 0, started: false, game: null, history: [], lastPlaced: [], message: "",
-    cpuTimer: null, reapTimer: null, timer, clock: null, flagTimer: null, timedOut: false, chat: [] };
+    cpuTimer: null, reapTimer: null, timer, clock: null, flagTimer: null, timedOut: false, chat: [],
+    fillCpu: cpuSeats.length > 0 };
   rooms.set(id, room);
   browsing.delete(ws);
   ctxOf.set(ws, { roomId: id, seat: 0 });
   send(ws, { t: "joined", roomId: id, seat: 0, token: room.seats[0].token });
   broadcastLobby(room);
+}
+
+// Quick play: drop the player straight into the next open lobby, creating a
+// fresh 2-player human room if none is joinable. This is the default landing.
+function doQuickplay(ws: WebSocket, msg: Extract<ClientMsg, { t: "quickplay" }>) {
+  // find an open, not-started room with a free human seat
+  for (const room of rooms.values()) {
+    if (room.started) continue;
+    const open = room.seats.some((s) => s.type === "human" && s.ws == null);
+    if (open) return doJoin(ws, { t: "join", roomId: room.id, name: msg.name });
+  }
+  // none available — create a new 2-player human room (host can reconfigure)
+  doCreate(ws, { t: "create", numPlayers: 2, cpuSeats: [], aiLevel: 1, boardRadius: 0, name: msg.name });
 }
 
 function doJoin(ws: WebSocket, msg: Extract<ClientMsg, { t: "join" }>) {
@@ -465,7 +554,17 @@ function doStart(ws: WebSocket) {
   const room = rooms.get(ctx.roomId); if (!room) return;
   if (!room.seats[ctx.seat]?.isHost) return send(ws, { t: "error", message: "Only the host can start." });
   if (room.started) return;
-  if (!room.seats.every(seatFilled)) return send(ws, { t: "error", message: "Waiting for all seats to fill." });
+  // If the host opted to fill empty seats with CPUs, do so now; otherwise every
+  // seat must be occupied by a connected human.
+  if (room.fillCpu) {
+    let cpu = room.seats.filter((s) => s.type === "cpu").length;
+    for (const s of room.seats) {
+      if (s.type === "human" && s.ws == null) {
+        s.type = "cpu"; s.name = `CPU ${++cpu}`; s.connected = true; s.token = ""; s.isHost = false;
+      }
+    }
+  }
+  if (!room.seats.every(seatFilled)) return send(ws, { t: "error", message: "Waiting for all seats to fill (or enable Fill with CPU)." });
 
   // Seat 0 always plays first, so shuffle the seats to randomize who goes first.
   shuffleSeats(room);
