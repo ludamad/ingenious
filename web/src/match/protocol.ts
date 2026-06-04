@@ -55,6 +55,7 @@ export type ClientMsg =
   | { t: "quickplay"; name: string }   // join the next open lobby, or create one
   | { t: "rejoin"; roomId: string; token: string }
   | { t: "rename"; name: string }      // change your display name in the lobby
+  | { t: "leave" }                     // intentionally leave the room (free the seat now)
   | { t: "config"; numPlayers?: number; boardRadius?: number; timer?: TimerConfig; fillCpu?: boolean } // host edits lobby settings
   | { t: "start" }
   | { t: "move"; tileIndex: number; q: number; r: number; dir: number; flip: number }

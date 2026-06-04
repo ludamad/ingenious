@@ -34,9 +34,12 @@ export function Browse({ match, onLeave }: { match: OnlineMatch; onLeave: () => 
           <button className="textlink" onClick={onLeave}>← menu</button>
         </div>
 
-        <label className="field col">
-          <span>Your name</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Player" maxLength={16} />
+        <label className="namebox">
+          <span className="namebox-label">Your name</span>
+          <span className="namebox-field">
+            <span className="namebox-pen" aria-hidden="true">✎</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Player" maxLength={24} />
+          </span>
         </label>
 
         {err && <p className="hint err">{err}</p>}
@@ -47,14 +50,18 @@ export function Browse({ match, onLeave }: { match: OnlineMatch; onLeave: () => 
             <button className="textlink" onClick={() => match.refresh()}>⟳ refresh</button>
           </div>
           {rooms.length === 0 ? (
-            <p className="hint">No open games right now — create one below.</p>
+            <p className="empty-rooms"><span className="empty-ic">🔍</span> No open games right now — create one below.</p>
           ) : (
             <ul className="roomlist">
               {rooms.map((r) => (
-                <li key={r.roomId}>
+                <li key={r.roomId} className="room-card">
+                  <span className="room-code-pill">{r.roomId}</span>
                   <div className="room-info">
-                    <span className="room-code">{r.roomId}</span>
-                    <span className="room-meta">{r.host} · {r.humanFilled}/{r.humanTotal} players · {cellsAcross(r.boardRadius)}-hex</span>
+                    <span className="room-host">{r.host}'s game</span>
+                    <span className="room-chips">
+                      <span className="rchip"><span className="chip-ic">👥</span>{r.humanFilled}/{r.humanTotal}</span>
+                      <span className="rchip"><span className="chip-ic">⬡</span>{cellsAcross(r.boardRadius)}-hex</span>
+                    </span>
                   </div>
                   <button className="primary" onClick={() => match.join(r.roomId, myName)}>Join</button>
                 </li>

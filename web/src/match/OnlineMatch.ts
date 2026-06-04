@@ -24,6 +24,7 @@ function loadSession(): SavedSession | null {
   } catch { return null; }
 }
 function saveSession(s: SavedSession) { try { sessionStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch { /* ignore */ } }
+function savedName(): string { try { return localStorage.getItem("ingenious.name") || "Player"; } catch { return "Player"; } }
 function clearSession() { try { sessionStorage.removeItem(SESSION_KEY); } catch { /* ignore */ } }
 
 type Link = "connecting" | "online" | "reconnecting" | "closed";
@@ -92,6 +93,17 @@ export class OnlineMatch extends Emitter implements Match {
   resuming(): boolean { return this.awaitingRejoin && !this.snap && !this.lobbyState; }
   start() { this.send({ t: "start" }); }
   rename(name: string) { this.send({ t: "rename", name }); }
+  // Leave the current room but stay connected, returning to the browse screen
+  // (manual create/join). Frees our seat on the server and refreshes the list.
+  leaveToBrowse() {
+    this.send({ t: "leave" });
+    clearSession();
+    this.seat = null; this.roomId = ""; this.token = "";
+    this.snap = null; this.lobbyState = null; this.err = "";
+    this.chatLog = []; this.unread = 0;
+    this.send({ t: "list" });
+    this.bump();
+  }
   configure(cfg: { numPlayers?: number; boardRadius?: number; timer?: TimerConfig; fillCpu?: boolean }) {
     this.send({ t: "config", ...cfg });
   }
@@ -131,8 +143,12 @@ export class OnlineMatch extends Emitter implements Match {
   swap() { this.send({ t: "swap" }); }
   pass() { this.send({ t: "pass" }); }
   undo() { this.send({ t: "undo" }); }
+  // Intentional teardown (the Leave button). Tell the server to free our seat
+  // now — distinct from a refresh/unload, which just drops the socket and lets
+  // the server reserve the seat for reconnection.
   dispose() {
     this.disposed = true;
+    try { if (this.open && this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ t: "leave" })); } catch { /* noop */ }
     clearSession();
     if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
     try { this.ws?.close(); } catch { /* noop */ }
@@ -225,16 +241,20 @@ export class OnlineMatch extends Emitter implements Match {
         if (msg.msg.seat !== this.seat) this.unread++;
         break;
       case "error":
-        this.err = msg.message;
-        // A failed rejoin means the seat/room is gone — stop chasing it and
-        // drop any stale game/lobby so we fall back to the browser cleanly.
+        // A failed rejoin means the seat/room is gone — drop the stale session
+        // and immediately fall back to quick play so a refresh never strands the
+        // user on an error (previously required a second manual refresh).
         if (this.awaitingRejoin) {
           this.awaitingRejoin = false;
           this.token = ""; this.roomId = "";
           this.snap = null; this.lobbyState = null;
           clearSession();
           if (this.retryTimer) { clearTimeout(this.retryTimer); this.retryTimer = null; }
+          this.err = "";
+          this.quickplay(savedName());
+          break;
         }
+        this.err = msg.message;
         break;
       case "snapshot": {
         const yourTurn = this.seat != null && msg.current === this.seat && !msg.gameOver;

@@ -19,6 +19,7 @@ export type ClientMsg =
   | { t: "quickplay"; name: string }
   | { t: "rejoin"; roomId: string; token: string }
   | { t: "rename"; name: string }
+  | { t: "leave" }
   | { t: "config"; numPlayers?: number; boardRadius?: number; timer?: TimerConfig; fillCpu?: boolean }
   | { t: "start" }
   | { t: "move"; tileIndex: number; q: number; r: number; dir: number; flip: number }

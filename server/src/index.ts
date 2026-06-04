@@ -37,6 +37,7 @@ const CPU_DELAY = 550;
 // players can come back to it.
 const DISCONNECT_GRACE = 15000;
 const ROOM_REAP_DELAY = 300000; // keep an abandoned game alive 5 min for rejoins
+const LOBBY_HOLD = 30000;       // reserve a dropped lobby seat this long for a reconnect (e.g. refresh)
 const COLOR_NAMES = ["red", "orange", "yellow", "green", "blue", "purple"];
 
 interface Seat {
@@ -66,6 +67,7 @@ interface Room {
   message: string;
   cpuTimer: NodeJS.Timeout | null;
   reapTimer: NodeJS.Timeout | null; // pending deletion of an abandoned room
+  holdTimer: NodeJS.Timeout | null; // pending release of reserved (dropped) lobby seats
   timer: TimerConfig;               // configured at create time
   clock: Clock | null;              // live once started (if timer active)
   flagTimer: NodeJS.Timeout | null; // fires when the running seat would flag
@@ -227,6 +229,20 @@ function describe(room: Room, mover: number, res: { deltas: { color: number; poi
 
 function clearTimer(room: Room) { if (room.cpuTimer) { clearTimeout(room.cpuTimer); room.cpuTimer = null; } }
 function cancelReap(room: Room) { if (room.reapTimer) { clearTimeout(room.reapTimer); room.reapTimer = null; } }
+function cancelHold(room: Room) { if (room.holdTimer) { clearTimeout(room.holdTimer); room.holdTimer = null; } }
+
+// An unstarted room whose players have all dropped: keep it (and reserved seats)
+// briefly so a refresh can reclaim its seat, then delete it if nobody returns.
+function scheduleHold(room: Room) {
+  cancelHold(room);
+  room.holdTimer = setTimeout(() => {
+    room.holdTimer = null;
+    if (!room.started && room.seats.every((s) => s.ws == null)) {
+      rooms.delete(room.id);
+      broadcastRooms();
+    }
+  }, LOBBY_HOLD);
+}
 function clearFlagTimer(room: Room) { if (room.flagTimer) { clearTimeout(room.flagTimer); room.flagTimer = null; } }
 
 // Point the room clock at the current seat and arm a timer to fire exactly when
@@ -344,6 +360,7 @@ function handle(ws: WebSocket, msg: ClientMsg) {
     case "quickplay": return doQuickplay(ws, msg);
     case "rejoin": return doRejoin(ws, msg);
     case "rename": return doRename(ws, msg);
+    case "leave": return doLeave(ws);
     case "config": return doConfig(ws, msg);
     case "start": return doStart(ws);
     case "undo": return doUndo(ws);
@@ -467,7 +484,7 @@ function doCreate(ws: WebSocket, msg: Extract<ClientMsg, { t: "create" }>) {
   const timer = sanitizeTimer(msg.timer);
   const room: Room = { id, numPlayers: n, seats, seed: (Math.floor(Math.random() * 0x7fffffff) + 1),
     boardRadius: msg.boardRadius | 0, started: false, game: null, history: [], lastPlaced: [], message: "",
-    cpuTimer: null, reapTimer: null, timer, clock: null, flagTimer: null, timedOut: false, chat: [],
+    cpuTimer: null, reapTimer: null, holdTimer: null, timer, clock: null, flagTimer: null, timedOut: false, chat: [],
     fillCpu: cpuSeats.length > 0 };
   rooms.set(id, room);
   browsing.delete(ws);
@@ -494,18 +511,51 @@ function doJoin(ws: WebSocket, msg: Extract<ClientMsg, { t: "join" }>) {
   const room = rooms.get(code);
   if (!room) return send(ws, { t: "error", message: "Room not found." });
   if (room.started) return send(ws, { t: "error", message: "Game already started." });
-  const seatIdx = room.seats.findIndex((s) => s.type === "human" && s.ws == null);
+  // Prefer a truly empty seat; fall back to a reserved (dropped) one so a full
+  // lobby of disconnected players doesn't block fresh joiners forever.
+  let seatIdx = room.seats.findIndex((s) => s.type === "human" && s.ws == null && s.token === "");
+  if (seatIdx < 0) seatIdx = room.seats.findIndex((s) => s.type === "human" && s.ws == null);
   if (seatIdx < 0) return send(ws, { t: "error", message: "Room is full." });
   vacate(ws); // leave any other room first
+  cancelHold(room);
   const seat = room.seats[seatIdx];
   seat.ws = ws; seat.connected = true; seat.name = cleanName(msg.name, `Seat ${seatIdx + 1}`);
   seat.token = newToken();
+  if (!room.seats.some((s) => s.isHost)) seat.isHost = true; // first one in hosts
   browsing.delete(ws);
   ctxOf.set(ws, { roomId: room.id, seat: seatIdx });
   send(ws, { t: "joined", roomId: room.id, seat: seatIdx, token: seat.token });
   sendChatHistory(ws, room);
   systemChat(room, `${seat.name} joined.`);
   broadcastLobby(room);
+}
+
+// Explicit, intentional leave (the Leave button): free the seat immediately
+// (unlike a refresh/drop, which reserves it for reconnection).
+function doLeave(ws: WebSocket) {
+  const ctx = ctxOf.get(ws); if (!ctx) return;
+  const room = rooms.get(ctx.roomId); if (!room) return;
+  const seat = room.seats[ctx.seat];
+  if (!seat || seat.ws !== ws) return;
+  const name = seat.name;
+  ctxOf.delete(ws);
+  if (!room.started) {
+    // fully vacate the seat: drop ws, retire token, reset name, hand off host
+    const wasHost = seat.isHost;
+    seat.ws = null; seat.connected = false; seat.token = ""; seat.isHost = false;
+    seat.name = `Seat ${ctx.seat + 1}`;
+    if (wasHost) {
+      const heir = room.seats.find((s) => s.type === "human" && s.ws != null);
+      if (heir) heir.isHost = true;
+    }
+    systemChat(room, `${name} left.`);
+    if (room.seats.every((s) => s.ws == null)) { cancelHold(room); rooms.delete(room.id); }
+    broadcastLobby(room);
+    broadcastRooms();
+  } else {
+    // mid-game: same as a disconnect (seat becomes reconnectable / auto-piloted)
+    onClose(ws);
+  }
 }
 
 // Reclaim a seat after a disconnect by presenting the secret token issued at
@@ -520,6 +570,7 @@ function doRejoin(ws: WebSocket, msg: Extract<ClientMsg, { t: "rejoin" }>) {
   const seat = room.seats[seatIdx];
   if (seat.ws && seat.ws !== ws) { try { seat.ws.close(); } catch { /* ignore */ } }
   cancelReap(room);
+  cancelHold(room);
   room.clock?.resume(); // unfreeze clocks now someone is back
   const wasDown = !seat.connected;
   seat.ws = ws; seat.connected = true;
@@ -648,19 +699,13 @@ function onClose(ws: WebSocket) {
 
   ctxOf.delete(ws);
   if (!room.started) {
-    // Retire the rejoin token (the seat may be reassigned to a new joiner).
-    seat.token = "";
-    if (!seat.isHost) seat.name = `Seat ${ctx.seat + 1}`;
-    // If the host left, hand host to a remaining connected human so the room
-    // isn't stuck unstartable (and the next joiner doesn't silently inherit it).
-    if (seat.isHost) {
-      seat.isHost = false;
-      const heir = room.seats.find((s) => s.type === "human" && s.ws != null);
-      if (heir) heir.isHost = true;
-    }
-    systemChat(room, `${droppedName} left.`);
-    // if nobody is connected, drop the room
-    if (room.seats.every((s) => s.ws == null)) rooms.delete(room.id);
+    // Lobby drop (e.g. a page refresh): RESERVE the seat — keep its token and
+    // name so the reconnecting client's rejoin succeeds. Only an explicit Leave
+    // (doLeave) frees the seat immediately. Abandoned reservations are released
+    // by a hold timer so seats don't stay stuck forever.
+    seat.connected = false; // ws already nulled above; token/name preserved
+    systemChat(room, `${droppedName} disconnected.`);
+    if (room.seats.every((s) => s.ws == null)) scheduleHold(room);
     broadcastLobby(room);
     broadcastRooms();
     return;
