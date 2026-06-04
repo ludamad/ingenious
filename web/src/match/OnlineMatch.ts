@@ -277,7 +277,9 @@ export class OnlineMatch extends Emitter implements Match {
           ranking: msg.ranking,
           reconnecting: this.link !== "online",
           clock: msg.clock,
-          heatmaps: yourTurn ? msg.heatmaps : undefined,
+          // own-tile heatmaps for any turn, so you can hover-preview while you
+          // wait for an opponent (the server only sends YOUR tiles' values).
+          heatmaps: msg.heatmaps,
         };
         break;
       }

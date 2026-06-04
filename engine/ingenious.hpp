@@ -161,10 +161,15 @@ public:
     // does (scoreFrom on both halves against the live board), so the preview can
     // never disagree with what a move would actually award. Returns (q, r, pts).
     struct HeatCell { int q, r, points; };
-    std::vector<HeatCell> tileHeatmap(int tileIndex) const {
+    // Heatmap for the seat to move (convenience wrapper).
+    std::vector<HeatCell> tileHeatmap(int tileIndex) const { return tileHeatmapFor(current_, tileIndex); }
+    // Heatmap for a SPECIFIC seat's rack tile — lets a client preview its own
+    // tiles even on an opponent's turn. Scores against the live board exactly as
+    // applyMove would; the first-round rule is evaluated for `seat`.
+    std::vector<HeatCell> tileHeatmapFor(int seat, int tileIndex) const {
         std::vector<HeatCell> out;
-        if (finished_) return out;
-        const auto& h = hands_[current_];
+        if (finished_ || seat < 0 || seat >= numPlayers_) return out;
+        const auto& h = hands_[seat];
         if (tileIndex < 0 || tileIndex >= (int)h.size()) return out;
         const int a = h[tileIndex][0], b = h[tileIndex][1];
         const bool sameColor = (a == b);
@@ -182,7 +187,7 @@ public:
                     int flips = sameColor ? 1 : 2;
                     for (int f = 0; f < flips; ++f) {
                         Move m{tileIndex, q, r, d, f};
-                        if (!firstMoveOk(m)) continue;            // honor first-round rule
+                        if (!firstMoveOkFor(seat, m)) continue;   // honor first-round rule for this seat
                         int ca = f ? b : a;                       // color at anchor
                         int cb = f ? a : b;                       // color at partner
                         // Score both halves against the current board, exactly as
@@ -453,8 +458,11 @@ private:
 
     // First-round rule: a player's first tile must touch a printed corner that no
     // one else has claimed yet.
-    bool firstMoveOk(const Move& m) const {
-        if (firstDone_[current_]) return true;
+    bool firstMoveOk(const Move& m) const { return firstMoveOkFor(current_, m); }
+    // Seat-parameterized first-round check, so previews can be computed for a
+    // seat other than the one to move (e.g. your own heatmap on an opponent's turn).
+    bool firstMoveOkFor(int seat, const Move& m) const {
+        if (firstDone_[seat]) return true;
         int bq = m.q + DIRS[m.dir][0], br = m.r + DIRS[m.dir][1];
         for (int i = 0; i < (int)corners_.size(); ++i) {
             if (cornerClaimed_[i]) continue;

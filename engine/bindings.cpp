@@ -18,6 +18,17 @@ val moveToVal(const Move& m) {
     return o;
 }
 
+val heatToVal(const std::vector<ing::Game::HeatCell>& cells) {
+    val arr = val::array();
+    int i = 0;
+    for (auto& h : cells) {
+        val o = val::object();
+        o.set("q", h.q); o.set("r", h.r); o.set("points", h.points);
+        arr.set(i++, o);
+    }
+    return arr;
+}
+
 // Thin wrapper so JS sees a clean class with val-returning methods.
 class IngGame {
 public:
@@ -101,16 +112,9 @@ public:
     }
 
     // Per-cell best-points preview for a rack tile (both faces, all dirs).
-    val tileHeatmap(int tileIndex) const {
-        val arr = val::array();
-        int i = 0;
-        for (auto& h : g_.tileHeatmap(tileIndex)) {
-            val o = val::object();
-            o.set("q", h.q); o.set("r", h.r); o.set("points", h.points);
-            arr.set(i++, o);
-        }
-        return arr;
-    }
+    val tileHeatmap(int tileIndex) const { return heatToVal(g_.tileHeatmap(tileIndex)); }
+    // Same, for a specific seat's tile (preview your own hand on others' turns).
+    val tileHeatmapFor(int seat, int tileIndex) const { return heatToVal(g_.tileHeatmapFor(seat, tileIndex)); }
 
     bool canSwap() const { return g_.canSwap(); }
     bool swap() { return g_.swap(); }
@@ -141,6 +145,7 @@ EMSCRIPTEN_BINDINGS(ingenious) {
         .function("applyMove",   &IngGame::applyMove)
         .function("aiMove",      &IngGame::aiMove)
         .function("tileHeatmap", &IngGame::tileHeatmap)
+        .function("tileHeatmapFor", &IngGame::tileHeatmapFor)
         .function("canSwap",     &IngGame::canSwap)
         .function("swap",        &IngGame::swap)
         .function("pass",        &IngGame::pass)

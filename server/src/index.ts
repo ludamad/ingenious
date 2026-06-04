@@ -184,13 +184,6 @@ function broadcast(room: Room) {
   // a human may undo their own last action, but only while no one has acted since
   const lastSeat = room.history.length ? room.history[room.history.length - 1].seat : -1;
 
-  // Placement heatmaps for the seat to move: computed once per position by the
-  // engine and sent only to that seat (it only reveals where THEIR own tiles
-  // score, so it leaks nothing). Done once here, not per recipient.
-  const heatmaps = !finished && room.seats[current]?.type === "human"
-    ? state.hands[current].map((_: any, i: number) => g.tileHeatmap(i))
-    : undefined;
-
   for (let seat = 0; seat < room.seats.length; seat++) {
     const ws = room.seats[seat].ws;
     if (!ws) continue;
@@ -198,6 +191,12 @@ function broadcast(room: Room) {
     // redact: only the viewer's own rack is revealed
     const redactedHands = state.hands.map((h: any[], i: number) =>
       i === seat ? h : h.map(() => ({ a: -1, b: -1 })));
+    // Each human gets a heatmap for THEIR OWN tiles (computed for `seat`), so a
+    // player can hover-preview their placements even on an opponent's turn. Only
+    // reveals where their own tiles would score, so it leaks nothing.
+    const heatmaps = !finished
+      ? state.hands[seat].map((_: any, i: number) => g.tileHeatmapFor(seat, i))
+      : undefined;
     const msg: ServerMsg = {
       t: "snapshot",
       state: { ...state, hands: redactedHands },
@@ -213,7 +212,7 @@ function broadcast(room: Room) {
       gameOver: finished,
       ranking,
       clock,
-      heatmaps: seat === current ? heatmaps : undefined,
+      heatmaps,
     };
     send(ws, msg);
   }

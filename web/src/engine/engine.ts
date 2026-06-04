@@ -44,6 +44,7 @@ export interface Game {
   applyMove(tileIndex: number, q: number, r: number, dir: number, flip: number): ApplyResult;
   aiMove(level: number): Move;
   tileHeatmap(tileIndex: number): HeatCell[];
+  tileHeatmapFor(seat: number, tileIndex: number): HeatCell[];
   canSwap(): boolean;
   swap(): boolean;
   pass(): boolean;

@@ -51,9 +51,9 @@ export function GameView({ match, onLeave }: { match: Match; onLeave: () => void
   const [explanation, setExplanation] = useState<string | null>(null);
   // tile the player is hovering in the rack (hand index) — previews its heatmap
   const [hoverTileIndex, setHoverTileIndex] = useState<number | null>(null);
-  // online-only chat drawer
+  // online-only chat — docked beside the board, shown by default
   const online = match instanceof OnlineMatch ? match : null;
-  const [chatOpen, setChatOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(true);
 
   const { state } = snap;
   const seat = snap.mySeat;
@@ -196,7 +196,7 @@ export function GameView({ match, onLeave }: { match: Match; onLeave: () => void
         </div>
       )}
 
-      <div className="layout">
+      <div className={"layout" + (online && chatOpen ? " with-chat" : "")}>
         <aside className="scoreboard">
           {snap.players.map((p, i) => (
             <ScorePanel key={i} name={p.name}
@@ -215,7 +215,7 @@ export function GameView({ match, onLeave }: { match: Match; onLeave: () => void
             legalMoves={legal}
             selectedTileIndex={selected}
             selectedTile={selectedTile}
-            hoverTileIndex={canSelect ? hoverTileIndex : null}
+            hoverTileIndex={hoverTileIndex}
             heatmaps={snap.heatmaps}
             flip={flip}
             anchor={anchor}
@@ -227,6 +227,16 @@ export function GameView({ match, onLeave }: { match: Match; onLeave: () => void
             onExplain={setExplanation}
           />
         </main>
+
+        {online && chatOpen && (
+          <aside className="chat-dock">
+            <div className="chat-dock-head">
+              <h3>Chat</h3>
+              <button className="ghost icon" onClick={() => setChatOpen(false)} title="Hide chat">✕</button>
+            </div>
+            <Chat match={online} compact />
+          </aside>
+        )}
       </div>
 
       <footer className="bottombar">
@@ -247,16 +257,6 @@ export function GameView({ match, onLeave }: { match: Match; onLeave: () => void
           {snap.yourTurn && snap.pendingBonus > 0 && <span className="bonus-pill">★ Bonus play</span>}
         </div>
       </footer>
-
-      {online && chatOpen && (
-        <aside className="chat-drawer">
-          <div className="chat-drawer-head">
-            <h3>Chat</h3>
-            <button className="ghost icon" onClick={() => setChatOpen(false)} title="Close chat">✕</button>
-          </div>
-          <Chat match={online} compact />
-        </aside>
-      )}
 
       {snap.gameOver && <GameOver snap={snap} onLeave={onLeave} />}
     </div>
