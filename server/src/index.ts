@@ -595,8 +595,12 @@ function shuffleSeats(room: Room) {
     [room.seats[i], room.seats[j]] = [room.seats[j], room.seats[i]];
   }
   for (let i = 0; i < room.seats.length; i++) {
-    const ws = room.seats[i].ws;
-    if (ws) ctxOf.set(ws, { roomId: room.id, seat: i });
+    const s = room.seats[i];
+    if (!s.ws) continue;
+    ctxOf.set(s.ws, { roomId: room.id, seat: i });
+    // Tell each client its NEW seat index — otherwise it keeps the seat it was
+    // dealt at join time and reads the wrong (redacted, all-gray) hand.
+    send(s.ws, { t: "joined", roomId: room.id, seat: i, token: s.token });
   }
 }
 

@@ -2,9 +2,9 @@
 // Off / Per-move / Chess (total + increment), mirroring chess-clock options.
 import type { TimerConfig, TimerMode } from "../match/types";
 
-const PERMOVE_OPTS = [10, 15, 30, 60];      // seconds per turn
-const TOTAL_OPTS = [1, 3, 5, 10];           // minutes total
-const INC_OPTS = [0, 2, 5, 10];             // seconds increment
+const PERMOVE_OPTS = [10, 15, 30, 60, 120, 300];   // seconds per turn (up to 5 min)
+const TOTAL_OPTS = [1, 3, 5, 10, 20, 30];          // minutes total (up to 30 min)
+const INC_OPTS = [0, 2, 5, 10, 20, 30];            // seconds increment (up to 30s)
 
 export function TimerSettings({ value, onChange }: { value: TimerConfig; onChange: (c: TimerConfig) => void }) {
   const mode = value.mode;
@@ -25,11 +25,11 @@ export function TimerSettings({ value, onChange }: { value: TimerConfig; onChang
       </label>
 
       {mode === "perMove" && (
-        <label className="field"><span>Seconds / turn</span>
-          <div className="seg">
+        <label className="field"><span>Per turn</span>
+          <div className="seg wrap">
             {PERMOVE_OPTS.map((s) => (
               <button key={s} className={value.perMoveSec === s ? "on" : ""}
-                onClick={() => onChange({ mode: "perMove", perMoveSec: s })}>{s}s</button>
+                onClick={() => onChange({ mode: "perMove", perMoveSec: s })}>{s < 60 ? `${s}s` : `${s / 60}m`}</button>
             ))}
           </div>
         </label>
@@ -38,7 +38,7 @@ export function TimerSettings({ value, onChange }: { value: TimerConfig; onChang
       {mode === "chess" && (
         <>
           <label className="field"><span>Total / player</span>
-            <div className="seg">
+            <div className="seg wrap">
               {TOTAL_OPTS.map((m) => (
                 <button key={m} className={value.totalSec === m * 60 ? "on" : ""}
                   onClick={() => onChange({ ...value, mode: "chess", totalSec: m * 60 })}>{m}m</button>
@@ -46,7 +46,7 @@ export function TimerSettings({ value, onChange }: { value: TimerConfig; onChang
             </div>
           </label>
           <label className="field"><span>Increment</span>
-            <div className="seg">
+            <div className="seg wrap">
               {INC_OPTS.map((s) => (
                 <button key={s} className={(value.incrementSec ?? 0) === s ? "on" : ""}
                   onClick={() => onChange({ ...value, mode: "chess", incrementSec: s })}>+{s}s</button>

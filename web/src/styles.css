@@ -107,6 +107,8 @@ input { font: inherit; }
   background: rgba(255,255,255,0.4); border: 1px dashed var(--panel-edge); border-radius: 12px; padding: 12px 14px; }
 .empty-ic { font-style: normal; }
 .browse-actions { margin: 10px 0; }
+.browse-actions .primary.big { width: 100%; }
+.create-hint { margin: 8px 0 0; text-align: center; color: var(--muted); font-size: 13px; }
 .create-box { background: rgba(255,255,255,0.5); border: 1px solid var(--panel-edge); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
 .create-box h3 { margin: 0; }
 .row { display: flex; gap: 10px; justify-content: flex-end; }
@@ -122,6 +124,7 @@ input { font: inherit; }
   background: rgba(255,255,255,0.85); min-width: 160px;
 }
 .seg { display: inline-flex; gap: 6px; }
+.seg.wrap { flex-wrap: wrap; justify-content: flex-end; }
 .seg.small button { padding: 6px 10px; font-size: 13px; }
 .field.col input { width: 100%; min-width: 0; }
 

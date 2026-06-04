@@ -1,9 +1,8 @@
 import { useState } from "react";
 import { useSyncExternalStore } from "react";
 import type { OnlineMatch } from "../match/OnlineMatch";
-import { MIN_RADIUS, MAX_RADIUS, STANDARD_RADIUS, cellsAcross } from "../board";
-import { DEFAULT_TIMER, type TimerConfig } from "../match/types";
-import { TimerSettings } from "./TimerSettings";
+import { cellsAcross } from "../board";
+import { DEFAULT_TIMER } from "../match/types";
 
 export function Browse({ match, onLeave }: { match: OnlineMatch; onLeave: () => void }) {
   useSyncExternalStore((cb) => match.onUpdate(cb), () => match.version());
@@ -11,19 +10,14 @@ export function Browse({ match, onLeave }: { match: OnlineMatch; onLeave: () => 
   const err = match.error();
 
   const [name, setName] = useState("");
-  const [showCreate, setShowCreate] = useState(false);
-  const [players, setPlayers] = useState(2);
-  const [fillCpu, setFillCpu] = useState(false);
-  const [radius, setRadius] = useState(STANDARD_RADIUS);
   const [code, setCode] = useState("");
-  const [advOpen, setAdvOpen] = useState(false);
-  const [timer, setTimer] = useState<TimerConfig>(DEFAULT_TIMER);
 
   const myName = name.trim() || "Player";
 
+  // Create a default room and drop straight into the lobby — the host configures
+  // players / CPUs / timer / board size there (no duplicate setup form here).
   function create() {
-    const cpuSeats = fillCpu ? Array.from({ length: players - 1 }, (_, i) => i + 1) : [];
-    match.create(players, cpuSeats, 1, radius, myName, timer);
+    match.create(2, [], 1, 0, myName, DEFAULT_TIMER);
   }
 
   return (
@@ -71,41 +65,8 @@ export function Browse({ match, onLeave }: { match: OnlineMatch; onLeave: () => 
         </div>
 
         <div className="browse-actions">
-          {!showCreate ? (
-            <button className="primary big" onClick={() => setShowCreate(true)}>+ Create a game</button>
-          ) : (
-            <div className="create-box">
-              <h3>Create a game</h3>
-              <label className="field"><span>Seats</span>
-                <div className="seg">
-                  {[2, 3, 4].map((n) => (
-                    <button key={n} className={players === n ? "on" : ""} onClick={() => setPlayers(n)}>{n}</button>
-                  ))}
-                </div>
-              </label>
-              <label className="checkrow">
-                <input type="checkbox" checked={fillCpu} onChange={(e) => setFillCpu(e.target.checked)} />
-                <span>Fill empty seats with CPU</span>
-              </label>
-              <TimerSettings value={timer} onChange={setTimer} />
-              <div className="advanced">
-                <button className="adv-toggle" onClick={() => setAdvOpen((o) => !o)}>{advOpen ? "▾" : "▸"} Options</button>
-                {advOpen && (
-                  <label className="field"><span>Board size</span>
-                    <div className="stepper">
-                      <button onClick={() => setRadius(Math.max(MIN_RADIUS, radius - 1))} disabled={radius <= MIN_RADIUS}>−</button>
-                      <span className="stepper-val">{cellsAcross(radius)} hexes</span>
-                      <button onClick={() => setRadius(Math.min(MAX_RADIUS, radius + 1))} disabled={radius >= MAX_RADIUS}>+</button>
-                    </div>
-                  </label>
-                )}
-              </div>
-              <div className="row">
-                <button className="ghost" onClick={() => setShowCreate(false)}>Cancel</button>
-                <button className="primary" onClick={create}>Create &amp; host</button>
-              </div>
-            </div>
-          )}
+          <button className="primary big" onClick={create}>+ Create a game</button>
+          <p className="create-hint">You'll set players, timer and board size in the room.</p>
         </div>
 
         <div className="joincode">
